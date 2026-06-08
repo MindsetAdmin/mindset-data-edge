@@ -129,7 +129,6 @@ func main() {
 	case <-ctx.Done():
 		fmt.Println("\n[AGENT] Stopped by user.")
 	case <-time.After(120 * time.Second):
-		fmt.Println("\n[AGENT] 10-second demo complete.")
-		fmt.Println("[AGENT] Next step: Session 2 — behavioral inference")
+		fmt.Println("\n[AGENT] 120-second demo complete.")
 	}
 }
