@@ -1,0 +1,21 @@
+# config/agent.yaml
+site:
+  name: "Local Test Site"
+  id: "local-id"
+
+#list of opc-ua endpoints to connect to
+opcua:
+  name: "Prosys"
+  endpoint: "opc.tcp://localhost:53530/OPCUA/SimulationServer"
+  security_mode: "None"
+  security_policy: "None"
+
+discovery:
+  scan_timeout_seconds: 10
+  noise_filter_hz: 10
+  observation_seconds: 15
+
+cloud:
+  endpoint: "http://localhost:8080"
+  api_key: "dev-key-local"
+  push_interval_seconds: 30
