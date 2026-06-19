@@ -1,0 +1,49 @@
+id: "pipeline_opcua_to_uns"
+name: "OPC-UA to UNS Transformer"
+description: "Transforme les données brutes OPC-UA en messages UNS contextualisés"
+version: "1.0"
+enabled: true          # ← AJOUTER CETTE LIGNE
+
+trigger:
+  type: "mqtt"
+  function: "mqtt_subscribe"
+  config:
+    topic: "mindset/raw/#"
+    qos: 1
+
+nodes:
+  - id: "read_opcua"
+    name: "Read OPC-UA"
+    type: "connector"
+    function: "opcua_read"
+    config:
+      timeout: 5000
+    depends_on: ["trigger"]
+
+  - id: "map_to_uns"
+    name: "Map to UNS"
+    type: "transform"
+    function: "uns_mapper"
+    config: {}
+    depends_on: ["read_opcua"]
+
+  - id: "filter_invalid"
+    name: "Filter Invalid"
+    type: "transform"
+    function: "filter"
+    config:
+      field: "value"
+      operator: "ne"
+      value: null
+    depends_on: ["map_to_uns"]
+
+  - id: "publish_uns"
+    name: "Publish to UNS"
+    type: "output"
+    function: "mqtt_publish"
+    config:
+      topic_prefix: "mindset/site"
+      qos: 1
+    depends_on: ["filter_invalid"]
+
+output: "publish_uns"

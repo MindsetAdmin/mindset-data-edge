@@ -3,6 +3,7 @@ package config
 
 import (
 	"os"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -11,6 +12,7 @@ type Config struct {
 	OpcUA     OpcUAConfig     `yaml:"opcua"`
 	Discovery DiscoveryConfig `yaml:"discovery"`
 	Cloud     CloudConfig     `yaml:"cloud"`
+	Cost      CostConfig      `yaml:"cost"`
 }
 
 type SiteConfig struct {
@@ -25,15 +27,21 @@ type OpcUAConfig struct {
 }
 
 type DiscoveryConfig struct {
-	ScanTimeoutSeconds  int `yaml:"scan_timeout_seconds"`
-	NoiseFilterHz       int `yaml:"noise_filter_hz"`
-	ObservationSeconds  int `yaml:"observation_seconds"`
+	ScanTimeoutSeconds int `yaml:"scan_timeout_seconds"`
+	NoiseFilterHz      int `yaml:"noise_filter_hz"`
+	ObservationSeconds int `yaml:"observation_seconds"`
 }
 
 type CloudConfig struct {
 	Endpoint            string `yaml:"endpoint"`
 	APIKey              string `yaml:"api_key"`
 	PushIntervalSeconds int    `yaml:"push_interval_seconds"`
+}
+type CostConfig struct {
+	HourlyCost      float64 `yaml:"hourly_cost"`
+	TheoreticalRate float64 `yaml:"theoretical_rate"`
+	ProductMargin   float64 `yaml:"product_margin"`
+	EnergyPrice     float64 `yaml:"energy_price"`
 }
 
 func LoadConfig(path string) (*Config, error) {

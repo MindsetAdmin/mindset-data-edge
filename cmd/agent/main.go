@@ -12,6 +12,16 @@ import (
 
 	"github.com/MindsetAdmin/mindset-data-edge/internal/config"
 	"github.com/MindsetAdmin/mindset-data-edge/internal/discovery"
+	"github.com/MindsetAdmin/mindset-data-edge/internal/functions"
+	"github.com/MindsetAdmin/mindset-data-edge/internal/functions/calculates"
+	"github.com/MindsetAdmin/mindset-data-edge/internal/functions/conditions"
+	"github.com/MindsetAdmin/mindset-data-edge/internal/functions/outputs"
+	"github.com/MindsetAdmin/mindset-data-edge/internal/functions/transforms"
+	"github.com/MindsetAdmin/mindset-data-edge/internal/kg"
+	"github.com/MindsetAdmin/mindset-data-edge/internal/mqtt"
+	"github.com/MindsetAdmin/mindset-data-edge/internal/pipeline"
+	"github.com/MindsetAdmin/mindset-data-edge/internal/rules"
+	"github.com/MindsetAdmin/mindset-data-edge/internal/uns"
 )
 
 func main() {
@@ -28,6 +38,7 @@ func main() {
 	}
 	log.Printf("[CONFIG] Site: %s (%s)", cfg.Site.Name, cfg.Site.ID)
 	log.Printf("[CONFIG] OPC-UA endpoint: %s", cfg.OpcUA.Endpoint)
+	log.Printf("[CONFIG] Cost: %.2f €/h", cfg.Cost.HourlyCost)
 
 	// Context with graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -42,18 +53,185 @@ func main() {
 		cancel()
 	}()
 
-	// ── STEP 1: OPC-UA Discovery ──────────────────────────────────────
+	// ── STEP 0: MQTT Publisher ──────────────────────────────────────────
+	fmt.Println("\n[MQTT] Initializing MQTT publisher...")
+
+	var mqttPub *mqtt.Publisher = nil
+	mqttPub, err = mqtt.NewPublisher("tcp://localhost:1883", cfg.Site.ID)
+	if err != nil {
+		log.Printf("[MQTT] ⚠️ Warning: failed to connect to broker: %v", err)
+		log.Printf("[MQTT] Continuing without MQTT (raw data won't be published)")
+	} else {
+		log.Printf("[MQTT] ✅ Connected to broker")
+		defer mqttPub.Disconnect()
+	}
+
+	// ── STEP 0.5: UNS Contextualizer ────────────────────────────────────
+	fmt.Println("\n[UNS] Initializing data contextualizer...")
+
+	var contextualizer *uns.Contextualizer = nil
+	if mqttPub != nil {
+		mapper := uns.NewMapper(cfg.Site.ID)
+		contextualizer, err = uns.NewContextualizer("tcp://localhost:1883", cfg.Site.ID, mapper)
+		if err != nil {
+			log.Printf("[UNS] ⚠️ Warning: failed to start contextualizer: %v", err)
+			log.Printf("[UNS] Continuing without UNS enrichment")
+		} else {
+			if err := contextualizer.Start(); err != nil {
+				log.Printf("[UNS] ⚠️ Warning: failed to subscribe: %v", err)
+			} else {
+				log.Printf("[UNS] ✅ Contextualizer started — publishing to mindset/site/#")
+				defer contextualizer.Stop()
+			}
+		}
+	}
+
+	// ── STEP 0.6: Rules Engine ──────────────────────────────────────────
+	fmt.Println("\n[RULES] Initializing rules engine...")
+
+	var rulesEngine *rules.Engine = nil
+	if mqttPub != nil {
+		rulesEngine, err = rules.NewEngine("tcp://localhost:1883", cfg.Site.ID)
+		if err != nil {
+			log.Printf("[RULES] ⚠️ Warning: failed to create engine: %v", err)
+		} else {
+			if err := rulesEngine.Start(); err != nil {
+				log.Printf("[RULES] ⚠️ Warning: failed to start engine: %v", err)
+			} else {
+				log.Printf("[RULES] ✅ Engine started — detecting micro-stops")
+				defer rulesEngine.Stop()
+			}
+		}
+	}
+
+	// ── STEP 0.7: Knowledge Graph ───────────────────────────────────────
+	fmt.Println("\n[KG] Initializing Knowledge Graph...")
+
+	kgInstance, err := kg.NewKnowledgeGraph("./data/mindset.db")
+	if err != nil {
+		log.Printf("[KG] ⚠️ Warning: failed to create KG: %v", err)
+	} else {
+		defer kgInstance.Close()
+		log.Printf("[KG] ✅ Knowledge Graph ready")
+
+		kgSub, err := kg.NewKGSubscriber("tcp://localhost:1883", kgInstance)
+		if err != nil {
+			log.Printf("[KG] ⚠️ Warning: failed to create subscriber: %v", err)
+		} else {
+			if err := kgSub.Start(); err != nil {
+				log.Printf("[KG] ⚠️ Warning: failed to start subscriber: %v", err)
+			} else {
+				defer kgSub.Stop()
+				log.Printf("[KG] ✅ Subscriber started")
+			}
+		}
+	}
+
+	// ── STEP 0.8: Functions Registry ────────────────────────────────────
+	fmt.Println("\n[FUNCTIONS] Registering functions...")
+
+	funcRegistry := functions.NewRegistry()
+
+	// Connectors (nécessitent un client MQTT)
+	if mqttPub != nil {
+		// Note: mqtt_publish et mqtt_subscribe nécessitent un client MQTT
+		// À implémenter si tu as un client MQTT séparé
+		log.Printf("[FUNCTIONS] MQTT functions available")
+	}
+
+	// Transforms
+	stateMachineHandler := transforms.NewStateMachineHandler()
+	funcRegistry.Register(stateMachineHandler.GetFunction())
+
+	unsMapperHandler := transforms.NewUNSMapperHandler(cfg.Site.ID)
+	funcRegistry.Register(unsMapperHandler.GetFunction())
+
+	filterHandler := transforms.NewFilterHandler()
+	funcRegistry.Register(filterHandler.GetFunction())
+
+	// Calculates
+	durationHandler := calculates.NewDurationHandler()
+	funcRegistry.Register(durationHandler.GetFunction())
+
+	hourlyRate := 85.0
+	if cfg.Cost.HourlyCost > 0 {
+		hourlyRate = cfg.Cost.HourlyCost
+	}
+	costHandler := calculates.NewCostHandler(hourlyRate)
+	funcRegistry.Register(costHandler.GetFunction())
+
+	// Conditions
+	thresholdHandler := conditions.NewThresholdHandler()
+	funcRegistry.Register(thresholdHandler.GetFunction())
+
+	// Outputs
+	if kgInstance != nil {
+		kgSaveHandler := outputs.NewKGSaveHandler(kgInstance)
+		funcRegistry.Register(kgSaveHandler.GetFunction())
+	}
+
+	// Afficher toutes les fonctions enregistrées
+	fmt.Printf("\n[FUNCTIONS] Registered %d functions:\n", len(funcRegistry.List()))
+	for _, fn := range funcRegistry.List() {
+		fmt.Printf("  ✓ %s (%s) - %s\n", fn.Name, fn.Type, fn.Description)
+	}
+
+	// ── STEP 0.9: Pipeline Engine ──────────────────────────────────────
+	fmt.Println("\n[PIPELINE] Initializing pipeline engine...")
+
+	pipelineEngine := pipeline.NewEngine(funcRegistry)
+
+	// Charger les pipelines depuis config/pipelines/
+	loader := pipeline.NewLoader("config/pipelines")
+	pipelines, err := loader.LoadAll()
+	if err != nil {
+		log.Printf("[PIPELINE] ⚠️ Warning: failed to load pipelines: %v", err)
+	} else {
+		for _, p := range pipelines {
+			if p == nil {
+				continue
+			}
+			if err := pipelineEngine.RegisterPipeline(p); err != nil {
+				log.Printf("[PIPELINE] ⚠️ Warning: failed to register pipeline %s: %v", p.Name, err)
+			} else {
+				log.Printf("[PIPELINE] ✅ Registered pipeline: %s (%s)", p.Name, p.ID)
+			}
+		}
+	}
+
+	// ── STEP 0.10: Technical Knowledge Graph ──────────────────────────
+	fmt.Println("\n[KG] Building technical knowledge graph...")
+
+	if pipelineEngine != nil && kgInstance != nil {
+		techGraph, err := kgInstance.GetTechnicalGraph(pipelineEngine.GetRegistry())
+		if err != nil {
+			log.Printf("[KG] ⚠️ Warning: failed to build technical graph: %v", err)
+		} else {
+			log.Printf("[KG] ✅ Technical graph built with %d nodes and %d edges",
+				len(techGraph.Nodes), len(techGraph.Edges))
+
+			// Optionnel: sauvegarder le graphe dans un fichier
+			// data, _ := json.MarshalIndent(techGraph, "", "  ")
+			// os.WriteFile("data/technical_graph.json", data, 0644)
+		}
+	}
+
+	// ── STEP 0.11: HTTP Server for KG Dashboard ───────────────────────
+	fmt.Println("\n[HTTP] Starting KG Dashboard server...")
+	startServer(kgInstance, pipelineEngine, funcRegistry)
+
+	// ── STEP 1: OPC-UA Discovery ────────────────────────────────────────
 	fmt.Println("\n[DISCOVERY] Starting OPC-UA auto-discovery...")
 	fmt.Printf("[DISCOVERY] Connecting to: %s\n\n", cfg.OpcUA.Endpoint)
 
-	opcua := discovery.NewOPCUADiscovery(cfg.OpcUA.Endpoint)
+	opcua := discovery.NewOPCUADiscovery(cfg.OpcUA.Endpoint, mqttPub)
 
 	if err := opcua.Connect(ctx); err != nil {
 		log.Fatalf("[DISCOVERY] Connection failed: %v\n\nMake sure Prosys OPC-UA Simulator is running!", err)
 	}
 	defer opcua.Disconnect(ctx)
 
-	// ── STEP 2: Browse node tree ──────────────────────────────────────
+	// ── STEP 2: Browse node tree ────────────────────────────────────────
 	fmt.Println("\n[DISCOVERY] Browsing node tree...\n")
 	tags, err := opcua.BrowseNodeTree(ctx)
 	if err != nil {
@@ -62,7 +240,7 @@ func main() {
 
 	fmt.Printf("\n[DISCOVERY] ✅ Found %d tags total\n", len(tags))
 
-	// ── STEP 3: Print summary ─────────────────────────────────────────
+	// ── STEP 3: Print summary ───────────────────────────────────────────
 	boolCount, floatCount, intCount, otherCount := 0, 0, 0, 0
 	for _, tag := range tags {
 		switch tag.DataType {
@@ -83,11 +261,8 @@ func main() {
 	fmt.Printf("  Integer  : %d  (→ candidate counters, setpoints)\n", intCount)
 	fmt.Printf("  Other    : %d\n", otherCount)
 
-
-
-
-	// ── STEP 4: Live subscription (120 seconds demo) ───────────────────
-	fmt.Println("\n[SUBSCRIBE] Starting live data subscription (10 seconds)...")
+	// ── STEP 4: Live subscription ───────────────────────────────────────
+	fmt.Println("\n[SUBSCRIBE] Starting live data subscription...")
 	fmt.Println("[SUBSCRIBE] Watching for value changes:\n")
 
 	err = opcua.Subscribe(ctx, tags, 500*time.Millisecond, func(tag discovery.Tag) {
@@ -117,18 +292,26 @@ func main() {
 			for _, t := range change.Removed {
 				fmt.Printf("  - %s\n", t.Name)
 			}
-
-			// TODO Session 3: rebuild subscription with allTags
-			// For now just log — subscription rebuild comes next
 			fmt.Printf("[WATCH] Rebuild subscription with %d tags\n", len(allTags))
 		},
 	)
 
-	// Wait 10 seconds then exit (or Ctrl+C)
+	// ── STEP 5: Wait for demo ───────────────────────────────────────────
+	fmt.Println("\n[AGENT] Demo running...")
+	fmt.Println("[AGENT] Press Ctrl+C to stop\n")
+
 	select {
 	case <-ctx.Done():
 		fmt.Println("\n[AGENT] Stopped by user.")
-	case <-time.After(120 * time.Second):
-		fmt.Println("\n[AGENT] 120-second demo complete.")
+	case <-time.After(20 * time.Minute):
+		fmt.Println("\n[AGENT] 20-minute demo complete.")
 	}
+}
+
+func countNodesByType(graph *kg.TechnicalGraph) map[string]int {
+	counts := make(map[string]int)
+	for _, node := range graph.Nodes {
+		counts[string(node.Type)]++
+	}
+	return counts
 }

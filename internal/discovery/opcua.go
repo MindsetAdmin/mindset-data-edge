@@ -9,6 +9,7 @@ import (
 
     "github.com/gopcua/opcua"
     "github.com/gopcua/opcua/ua"
+    "github.com/MindsetAdmin/mindset-data-edge/internal/mqtt"
 )
 
 // Tag represents a discovered OPC-UA tag
@@ -29,12 +30,14 @@ type TagChange struct {
 type OPCUADiscovery struct {
     endpoint string
     client   *opcua.Client
+    mqttPub   *mqtt.Publisher
 }
 
 // NewOPCUADiscovery creates a new OPC-UA discovery instance
-func NewOPCUADiscovery(endpoint string) *OPCUADiscovery {
+func NewOPCUADiscovery(endpoint string, mqttPub *mqtt.Publisher) *OPCUADiscovery {
     return &OPCUADiscovery{
         endpoint: endpoint,
+        mqttPub:  mqttPub,
     }
 }
 
@@ -447,6 +450,7 @@ func (d *OPCUADiscovery) Subscribe(
                     idx := int(item.ClientHandle) - 1
                     if idx >= 0 && idx < len(tags) {
                         tags[idx].Value = item.Value.Value.Value()
+                        d.mqttPub.PublishRaw(tags[idx].Name, tags[idx].NodeID, tags[idx].DataType, tags[idx].Value)
                         callback(tags[idx])
                     }
                 }

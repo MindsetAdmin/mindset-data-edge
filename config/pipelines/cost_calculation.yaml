@@ -1,0 +1,48 @@
+id: "pipeline_cost_calculation"
+name: "Cost Calculation"
+description: "Calcule le coût des micro-stops en euros"
+version: "1.0"
+enabled: true
+
+trigger:
+  type: "mqtt"
+  function: "mqtt_subscribe"
+  config:
+    topic: "mindset/events/micro-stop"
+    qos: 1
+
+nodes:
+  - id: "parse_event"
+    name: "Parse Event"
+    type: "transform"
+    function: "parse_json"
+    config: {}
+    depends_on: ["trigger"]
+
+  - id: "calculate_cost"
+    name: "Calculate Cost"
+    type: "calculate"
+    function: "calculate_cost"
+    config:
+      hourly_rate: 85.0
+      currency: "EUR"
+    depends_on: ["parse_event"]
+
+  - id: "publish_cost"
+    name: "Publish Cost"
+    type: "output"
+    function: "mqtt_publish"
+    config:
+      topic: "mindset/events/micro-stop-cost"
+      qos: 1
+    depends_on: ["calculate_cost"]
+
+  - id: "save_cost_to_kg"
+    name: "Save Cost to KG"
+    type: "output"
+    function: "kg_save"
+    config:
+      node_type: "cost"
+    depends_on: ["calculate_cost"]
+
+output: "publish_cost"

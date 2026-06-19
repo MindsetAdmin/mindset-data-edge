@@ -1,7 +1,7 @@
 # config/agent.yaml
 site:
   name: "Local Test Site"
-  id: "local-id"
+  id: "local-test"
 
 #list of opc-ua endpoints to connect to
 opcua:
@@ -15,7 +15,13 @@ discovery:
   noise_filter_hz: 10
   observation_seconds: 15
 
-cloud:
-  endpoint: "http://localhost:8080"
-  api_key: "dev-key-local"
-  push_interval_seconds: 30
+mqtt:
+  broker: "tcp://localhost:1883"
+  raw_topic_prefix: "mindset/raw"
+  events_topic_prefix: "mindset/events"
+
+cost:
+  hourly_cost: 85.0
+  theoretical_rate: 3600
+  product_margin: 0.08
+  energy_price: 0.12
