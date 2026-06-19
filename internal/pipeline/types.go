@@ -45,8 +45,8 @@ type Pipeline struct {
 	Trigger     Trigger                `json:"trigger" yaml:"trigger"`
 	Nodes       []Node                 `json:"nodes" yaml:"nodes"`
 	Output      string                 `json:"output" yaml:"output"` // ID du nœud de sortie
-	CreatedAt   time.Time              `json:"created_at"`
-	UpdatedAt   time.Time              `json:"updated_at"`
+	CreatedAt   time.Time              `json:"created_at" yaml:"-"`  // runtime-only, never persisted to YAML
+	UpdatedAt   time.Time              `json:"updated_at" yaml:"-"`  // runtime-only, never persisted to YAML
 }
 
 // ExecutionStatus représente le statut d'exécution

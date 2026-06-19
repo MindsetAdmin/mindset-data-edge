@@ -24,21 +24,15 @@ func NewTechnicalBuilder(pipelineReg *pipeline.Registry) *TechnicalBuilder {
 	}
 }
 
-// Build construit le graphe technique complet
+// Build construit le graphe technique complet.
+// Modèle "relations externes uniquement" : un Pipeline est relié aux Connexions,
+// Topics (entrée/sortie) et Dashboards — PAS à ses fonctions internes (exposées
+// via la propriété "functions"). Cf. docs/mindset - Demo.md.
 func (b *TechnicalBuilder) Build() *TechnicalGraph {
-	// 1. Ajouter tous les pipelines
 	b.addPipelines()
-
-	// 2. Ajouter toutes les fonctions
-	b.addFunctions()
-
-	// 3. Ajouter les topics
 	b.addTopics()
-
-	// 4. Ajouter les connexions
 	b.addConnections()
-
-	// 5. Ajouter les relations
+	b.addDashboards()
 	b.addRelations()
 
 	return &TechnicalGraph{
@@ -59,6 +53,9 @@ func (b *TechnicalBuilder) addPipelines() {
 				"description": p.Description,
 				"version":     p.Version,
 				"enabled":     true,
+				// Relation externe uniquement : on expose le nombre de fonctions
+				// internes ("dépend de N fonctions") sans les détailler.
+				"functions": len(p.Nodes),
 			},
 			CreatedAt: time.Now(),
 		}
@@ -66,29 +63,16 @@ func (b *TechnicalBuilder) addPipelines() {
 	}
 }
 
-// addFunctions ajoute les fonctions utilisées
-func (b *TechnicalBuilder) addFunctions() {
-	functionsSeen := make(map[string]bool)
-
-	for _, p := range b.pipelineReg.List() {
-		for _, node := range p.Nodes {
-			fnName := node.Function
-			if functionsSeen[fnName] {
-				continue
-			}
-			functionsSeen[fnName] = true
-
-			nodeID := fmt.Sprintf("function_%s", fnName)
-			b.nodes[nodeID] = TechnicalNode{
-				ID:   nodeID,
-				Type: TechNodeFunction,
-				Name: fnName,
-				Properties: map[string]interface{}{
-					"type": node.Type,
-				},
-				CreatedAt: time.Now(),
-			}
-		}
+// addDashboards ajoute le(s) nœud(s) Dashboard
+func (b *TechnicalBuilder) addDashboards() {
+	b.nodes["dashboard_main"] = TechnicalNode{
+		ID:   "dashboard_main",
+		Type: TechNodeDashboard,
+		Name: "Operations Dashboard",
+		Properties: map[string]interface{}{
+			"description": "Métriques temps réel : micro-arrêts, downtime, coûts",
+		},
+		CreatedAt: time.Now(),
 	}
 }
 
@@ -163,34 +147,47 @@ func (b *TechnicalBuilder) addRelations() {
 	for _, p := range b.pipelineReg.List() {
 		pipelineID := fmt.Sprintf("pipeline_%s", p.ID)
 
-		// Relation: Pipeline → Fonctions
-		for _, node := range p.Nodes {
-			functionID := fmt.Sprintf("function_%s", node.Function)
-			b.addEdge(pipelineID, functionID, EdgeDependsOn, 1.0)
-		}
-
-		// Relation: Trigger → Pipeline
+		// Relation: Trigger → Pipeline (le pipeline consomme ce topic)
 		triggerTopic := "mindset/raw/#"
 		if topic, ok := p.Trigger.Config["topic"].(string); ok {
 			triggerTopic = topic
 		}
-		topicID := fmt.Sprintf("topic_%s", sanitizeID(triggerTopic))
+		topicID := b.ensureTopicNode(triggerTopic)
 		b.addEdge(topicID, pipelineID, EdgeTriggers, 1.0)
 
-		// Relation: Pipeline → Output Topic
+		// Relation: Pipeline → Output Topic (topics produits)
 		for _, node := range p.Nodes {
 			if node.Type == "output" {
 				if topic, ok := node.Config["topic"].(string); ok {
-					topicID := fmt.Sprintf("topic_%s", sanitizeID(topic))
-					b.addEdge(pipelineID, topicID, EdgeProduces, 1.0)
+					outID := b.ensureTopicNode(topic)
+					b.addEdge(pipelineID, outID, EdgeProduces, 1.0)
+					// Le Dashboard consomme les topics produits
+					b.addEdge(outID, "dashboard_main", EdgeSubscribesTo, 1.0)
 				}
 				if prefix, ok := node.Config["topic_prefix"].(string); ok {
-					topicID := fmt.Sprintf("topic_%s", sanitizeID(prefix+"/#"))
-					b.addEdge(pipelineID, topicID, EdgeProduces, 1.0)
+					outID := b.ensureTopicNode(prefix + "/#")
+					b.addEdge(pipelineID, outID, EdgeProduces, 1.0)
 				}
 			}
 		}
 	}
+}
+
+// ensureTopicNode crée le nœud topic s'il n'existe pas déjà et retourne son ID.
+// Évite les arêtes pointant vers des nœuds inexistants (ex: topics de trigger
+// spécifiques absents de la liste par défaut).
+func (b *TechnicalBuilder) ensureTopicNode(topic string) string {
+	nodeID := fmt.Sprintf("topic_%s", sanitizeID(topic))
+	if _, ok := b.nodes[nodeID]; !ok {
+		b.nodes[nodeID] = TechnicalNode{
+			ID:         nodeID,
+			Type:       TechNodeTopic,
+			Name:       topic,
+			Properties: map[string]interface{}{"qos_default": 1},
+			CreatedAt:  time.Now(),
+		}
+	}
+	return nodeID
 }
 
 // addEdge ajoute une relation (évite les doublons)

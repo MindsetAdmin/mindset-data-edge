@@ -49,6 +49,12 @@ func (h *KGSaveHandler) Execute(eventID, workCenter string, durationSeconds floa
 		return fmt.Errorf("knowledge graph not initialized")
 	}
 
+	// Rien à enregistrer si l'événement est vide (ex: exécution manuelle sans
+	// données de trigger) — évite de polluer le graphe avec des nœuds vides.
+	if eventID == "" {
+		return nil
+	}
+
 	// Ajouter le micro-stop au KG
 	if err := h.kg.AddMicroStop(eventID, workCenter, durationSeconds); err != nil {
 		return fmt.Errorf("failed to add micro-stop: %w", err)

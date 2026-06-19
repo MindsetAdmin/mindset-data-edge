@@ -92,10 +92,12 @@ func (e *Engine) Execute(ctx context.Context, pipelineID string, triggerData map
 				continue
 			}
 
-			// Vérifier que toutes les dépendances sont satisfaites
+			// Vérifier que toutes les dépendances sont satisfaites.
+			// Une dépendance qui n'est pas un nœud du pipeline (ex: "trigger")
+			// est considérée comme déjà satisfaite — c'est le déclencheur.
 			depsMet := true
 			for _, depID := range node.DependsOn {
-				if !executed[depID] {
+				if _, isNode := nodeMap[depID]; isNode && !executed[depID] {
 					depsMet = false
 					break
 				}
@@ -228,11 +230,19 @@ func (e *Engine) executeNode(ctx context.Context, node Node, previousResults map
 	return result
 }
 
-// callFunction appelle une fonction avec ses paramètres
-func (e *Engine) callFunction(fn *functions.Function, params map[string]interface{}) (interface{}, error) {
+// callFunction appelle une fonction avec ses paramètres.
+// Un recover protège le serveur : un handler sans client (ex: mqtt_publish/
+// opcua_read sans connexion) renvoie une erreur au lieu de planter le process.
+func (e *Engine) callFunction(fn *functions.Function, params map[string]interface{}) (output interface{}, err error) {
 	if fn.Handler == nil {
 		return nil, fmt.Errorf("function %s has no handler", fn.Name)
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			output = nil
+			err = fmt.Errorf("function %s panicked: %v", fn.Name, r)
+		}
+	}()
 	log.Printf("[PIPELINE] Calling function: %s", fn.Name)
 	return fn.Handler(params)
 }

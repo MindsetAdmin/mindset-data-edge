@@ -38,3 +38,31 @@ export async function fetchPipelines() {
     }
     return response.json();
 }
+
+export async function runPipeline(id) {
+    const response = await fetch(`${API_BASE}/pipelines/${encodeURIComponent(id)}/run`, {
+        method: 'POST',
+    });
+    if (!response.ok) {
+        const body = await response.text();
+        throw new Error(body || `Failed to run pipeline: ${response.statusText}`);
+    }
+    return response.json();
+}
+
+export async function fetchStats() {
+    const response = await fetch(`${API_BASE}/stats`);
+    if (!response.ok) {
+        throw new Error(`Failed to fetch stats: ${response.statusText}`);
+    }
+    return response.json();
+}
+
+// kind: 'technical' | 'domain'
+export async function fetchKnowledgeGraph(kind = 'technical') {
+    const response = await fetch(`${API_BASE}/kg/${kind}`);
+    if (!response.ok) {
+        throw new Error(`Failed to fetch ${kind} graph: ${response.statusText}`);
+    }
+    return response.json();
+}

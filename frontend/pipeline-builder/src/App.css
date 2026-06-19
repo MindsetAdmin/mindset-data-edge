@@ -1,9 +1,4 @@
-/* Styles pour le drag & drop - à compléter plus tard */
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-/* Scrollbar personnalisée */
+/* Scrollbar personnalisée (Tailwind est chargé via index.css) */
 ::-webkit-scrollbar {
     width: 6px;
 }
