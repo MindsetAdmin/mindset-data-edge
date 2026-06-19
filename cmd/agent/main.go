@@ -216,9 +216,8 @@ func main() {
 		}
 	}
 
-	// ── STEP 0.11: HTTP Server for KG Dashboard ───────────────────────
-	fmt.Println("\n[HTTP] Starting KG Dashboard server...")
-	startServer(kgInstance, pipelineEngine, funcRegistry)
+	// HTTP is owned by cmd/server (the standalone API the web UI talks to).
+	// The agent is purely the edge runtime; run `go run ./cmd/server` for the UI.
 
 	// ── STEP 1: OPC-UA Discovery ────────────────────────────────────────
 	fmt.Println("\n[DISCOVERY] Starting OPC-UA auto-discovery...")
