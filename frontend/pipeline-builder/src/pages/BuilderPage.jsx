@@ -17,7 +17,7 @@ import PickerModal from '../components/PickerModal';
 import PipelineNode from '../components/nodes/PipelineNode';
 import TriggerNode from '../components/nodes/TriggerNode';
 import ZoneNode from '../components/nodes/ZoneNode';
-import { fetchFunctions, fetchPipelines, createPipeline, runPipeline, fetchKnowledgeGraph } from '../api/client';
+import { fetchFunctions, fetchPipelines, createPipeline, runPipeline, fetchKnowledgeGraph, fetchTags } from '../api/client';
 import { getCategory } from '../lib/functionMeta';
 import { defaultConfigFor, triggerTypeFor } from '../lib/connectorTemplates';
 import {
@@ -45,7 +45,7 @@ function BuilderInner() {
   const [meta, setMeta] = useState({ id: '', name: '', description: '' });
   const [status, setStatus] = useState(null);
   const [showFnPicker, setShowFnPicker] = useState(false);
-  const [fieldPickers, setFieldPickers] = useState({ machine_id: [], topic: [], broker: [] });
+  const [fieldPickers, setFieldPickers] = useState({ machine_id: [], topic: [], broker: [], node_id: [] });
 
   const { screenToFlowPosition } = useReactFlow();
 
@@ -67,6 +67,7 @@ function BuilderInner() {
     ];
     let machine_id = [];
     let topic = [];
+    let node_id = [];
     try {
       const domain = await fetchKnowledgeGraph('domain');
       machine_id = (domain.nodes || [])
@@ -79,7 +80,16 @@ function BuilderInner() {
         .filter((n) => n.type === 'topic')
         .map((n) => ({ value: n.name, label: n.name, sub: 'topic MQTT' }));
     } catch { /* best-effort */ }
-    setFieldPickers({ machine_id, topic, broker: brokers });
+    try {
+      const t = await fetchTags();
+      node_id = (t.tags || []).map((tag) => ({
+        value: tag.node_id,
+        label: tag.name || tag.node_id,
+        sub: `valeur: ${tag.value} · ${tag.data_type}`,
+        badge: tag.node_id,
+      }));
+    } catch { /* best-effort */ }
+    setFieldPickers({ machine_id, topic, broker: brokers, node_id });
   }
 
   async function loadFunctions() {

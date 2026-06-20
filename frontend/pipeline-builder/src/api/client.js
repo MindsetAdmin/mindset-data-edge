@@ -50,6 +50,14 @@ export async function runPipeline(id) {
     return response.json();
 }
 
+export async function fetchTags() {
+    const response = await fetch(`${API_BASE}/tags`);
+    if (!response.ok) {
+        throw new Error(`Failed to fetch tags: ${response.statusText}`);
+    }
+    return response.json();
+}
+
 export async function fetchStats() {
     const response = await fetch(`${API_BASE}/stats`);
     if (!response.ok) {

@@ -38,6 +38,7 @@ type server struct {
 	kg           *kg.KnowledgeGraph
 	pipelinesDir string
 	hourlyRate   float64
+	tags         *TagRegistry
 }
 
 func main() {
@@ -84,11 +85,23 @@ func main() {
 		}
 	}
 
+	// Live OPC-UA tag registry: learns tags from mindset/raw/# (published by the
+	// agent) so the builder can show real discovered tags + values.
+	tagReg := NewTagRegistry(kgInstance.Store().DB())
+	if mqttClient != nil {
+		if err := tagReg.startTagSubscriber(mqttClient); err != nil {
+			log.Printf("[API] Tag subscriber failed: %v", err)
+		} else {
+			log.Printf("[API] Tag discovery active (mindset/raw/#)")
+		}
+	}
+
 	srv := &server{
 		funcRegistry: buildRegistry(hourlyRate, mqttClient),
 		kg:           kgInstance,
 		pipelinesDir: *pipelinesDir,
 		hourlyRate:   hourlyRate,
+		tags:         tagReg,
 	}
 
 	mux := http.NewServeMux()
@@ -96,6 +109,7 @@ func main() {
 	mux.HandleFunc("/api/connectors", srv.handleConnectors)
 	mux.HandleFunc("/api/pipelines", srv.handlePipelines)          // GET list, POST save
 	mux.HandleFunc("/api/pipelines/{id}/run", srv.handleRunPipeline) // POST execute
+	mux.HandleFunc("/api/tags", srv.handleTags)
 	mux.HandleFunc("/api/kg/technical", srv.handleTechnicalGraph)
 	mux.HandleFunc("/api/kg/domain", srv.handleDomainGraph)
 	mux.HandleFunc("/api/stats", srv.handleStats)
@@ -300,6 +314,11 @@ func (s *server) handleRunPipeline(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("[API] Ran pipeline %q -> %s", target.ID, result.Status)
 	writeJSON(w, result)
+}
+
+func (s *server) handleTags(w http.ResponseWriter, r *http.Request) {
+	list := s.tags.list()
+	writeJSON(w, map[string]interface{}{"tags": list, "total": len(list)})
 }
 
 func (s *server) handleTechnicalGraph(w http.ResponseWriter, r *http.Request) {
