@@ -8,51 +8,41 @@ trigger:
   type: "mqtt"
   function: "mqtt_subscribe"
   config:
-    topic: "mindset/events/status-change"
+    topic: "mindset/raw/ns=3;i=1014"
     qos: 1
 
 nodes:
-  - id: "parse_event"
-    name: "Parse Status Event"
+  - id: "state_machine"
+    name: "State Machine"
     type: "transform"
-    function: "parse_json"
-    config: {}
+    function: "state_machine"
+    config:
+      machine_id: "machine1"
     depends_on: ["trigger"]
 
-  - id: "check_duration"
-    name: "Check Duration (30s-3min)"
+  - id: "duration"
+    name: "Duration"
+    type: "calculate"
+    function: "calculate_duration"
+    config: {}
+    depends_on: ["state_machine"]
+
+  - id: "threshold"
+    name: "Threshold (30s-3min)"
     type: "condition"
     function: "threshold"
     config:
       min: 30
       max: 180
-    depends_on: ["parse_event"]
+    depends_on: ["duration"]
 
-  - id: "add_context"
-    name: "Add Machine Context"
-    type: "transform"
-    function: "enrich_context"
-    config:
-      context:
-        - "work_center"
-        - "duration_seconds"
-    depends_on: ["check_duration"]
-
-  - id: "publish_microstop"
-    name: "Publish Micro-stop Event"
+  - id: "mqtt_publish"
+    name: "Publish Micro-stop"
     type: "output"
     function: "mqtt_publish"
     config:
       topic: "mindset/events/micro-stop"
       qos: 1
-    depends_on: ["add_context"]
+    depends_on: ["threshold"]
 
-  - id: "save_to_kg"
-    name: "Save to Knowledge Graph"
-    type: "output"
-    function: "kg_save"
-    config:
-      confidence: 0.9
-    depends_on: ["publish_microstop"]
-
-output: "publish_microstop"
+output: "mqtt_publish"

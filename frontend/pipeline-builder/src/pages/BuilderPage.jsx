@@ -13,29 +13,26 @@ import 'reactflow/dist/style.css';
 
 import Palette from '../components/Palette';
 import NodeConfigPanel from '../components/NodeConfigPanel';
+import PickerModal from '../components/PickerModal';
 import PipelineNode from '../components/nodes/PipelineNode';
 import TriggerNode from '../components/nodes/TriggerNode';
-import { fetchFunctions, fetchPipelines, createPipeline, runPipeline } from '../api/client';
+import ZoneNode from '../components/nodes/ZoneNode';
+import { fetchFunctions, fetchPipelines, createPipeline, runPipeline, fetchKnowledgeGraph } from '../api/client';
 import { getCategory } from '../lib/functionMeta';
 import { defaultConfigFor, triggerTypeFor } from '../lib/connectorTemplates';
-import { flowToPipeline, pipelineToFlow, slugify, TRIGGER_ID } from '../lib/pipelineMapping';
+import {
+  flowToPipeline,
+  pipelineToFlow,
+  slugify,
+  TRIGGER_ID,
+  makeZoneNodes,
+  makeTriggerNode,
+} from '../lib/pipelineMapping';
 import { useStudioStore } from '../store/studioStore';
 
-const nodeTypes = { pipelineNode: PipelineNode, triggerNode: TriggerNode };
+const nodeTypes = { pipelineNode: PipelineNode, triggerNode: TriggerNode, zoneNode: ZoneNode };
 
-const makeInitialNodes = () => [
-  {
-    id: TRIGGER_ID,
-    type: 'triggerNode',
-    position: { x: 40, y: 200 },
-    deletable: false,
-    data: {
-      triggerType: 'mqtt',
-      function: 'mqtt_subscribe',
-      config: { topic: 'mindset/events/status-change', qos: 1 },
-    },
-  },
-];
+const makeInitialNodes = () => [...makeZoneNodes(), makeTriggerNode()];
 
 function BuilderInner() {
   const [nodes, setNodes, onNodesChange] = useNodesState(makeInitialNodes());
@@ -47,6 +44,8 @@ function BuilderInner() {
   const [selectedId, setSelectedId] = useState(null);
   const [meta, setMeta] = useState({ id: '', name: '', description: '' });
   const [status, setStatus] = useState(null);
+  const [showFnPicker, setShowFnPicker] = useState(false);
+  const [fieldPickers, setFieldPickers] = useState({ machine_id: [], topic: [], broker: [] });
 
   const { screenToFlowPosition } = useReactFlow();
 
@@ -57,7 +56,31 @@ function BuilderInner() {
   useEffect(() => {
     loadFunctions();
     refreshPipelines();
+    loadPickerOptions();
   }, []);
+
+  async function loadPickerOptions() {
+    const brokers = [
+      { value: 'tcp://localhost:1883', label: 'tcp://localhost:1883', badge: 'défaut' },
+      { value: 'tcp://192.168.1.100:1883', label: 'tcp://192.168.1.100:1883' },
+      { value: 'tcp://factory-mqtt.internal:1883', label: 'tcp://factory-mqtt.internal:1883' },
+    ];
+    let machine_id = [];
+    let topic = [];
+    try {
+      const domain = await fetchKnowledgeGraph('domain');
+      machine_id = (domain.nodes || [])
+        .filter((n) => n.type === 'Equipment')
+        .map((n) => ({ value: n.properties?.work_center || n.label, label: n.label, sub: 'machine' }));
+    } catch { /* best-effort */ }
+    try {
+      const tech = await fetchKnowledgeGraph('technical');
+      topic = (tech.nodes || [])
+        .filter((n) => n.type === 'topic')
+        .map((n) => ({ value: n.name, label: n.name, sub: 'topic MQTT' }));
+    } catch { /* best-effort */ }
+    setFieldPickers({ machine_id, topic, broker: brokers });
+  }
 
   async function loadFunctions() {
     try {
@@ -118,8 +141,33 @@ function BuilderInner() {
     [setNodes]
   );
 
+  const handleDeleteNode = useCallback(
+    (id) => {
+      setNodes((nds) => nds.filter((n) => n.id !== id));
+      setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id));
+      setSelectedId(null);
+    },
+    [setNodes, setEdges]
+  );
+
   const selectedNode = nodes.find((n) => n.id === selectedId) || null;
   const connectors = functions.filter((f) => f.type === 'connector');
+  const functionPickerOptions = functions
+    .filter((f) => f.type !== 'connector')
+    .map((f) => ({ value: f.name, label: f.name, sub: f.description, group: getCategory(f.type), fnType: f.type }));
+
+  function addFunctionNode(o) {
+    const id = `${slugify(o.value)}_${Math.random().toString(36).slice(2, 7)}`;
+    setNodes((nds) =>
+      nds.concat({
+        id,
+        type: 'pipelineNode',
+        position: { x: 300 + Math.random() * 160, y: 90 + Math.random() * 240 },
+        data: { name: o.value, type: o.fnType, function: o.value, config: {}, category: getCategory(o.fnType) },
+      })
+    );
+    setShowFnPicker(false);
+  }
 
   function handleNameChange(value) {
     setMeta((m) => ({ ...m, name: value, id: m.id || slugify(value) }));
@@ -237,6 +285,12 @@ function BuilderInner() {
             ▶️ Exécuter
           </button>
           <button
+            onClick={() => setShowFnPicker(true)}
+            className="bg-dark-700 hover:bg-dark-600 text-white text-sm px-3 py-1.5 rounded-md transition"
+          >
+            ➕ Fonction
+          </button>
+          <button
             onClick={handleNew}
             className="bg-dark-700 hover:bg-dark-600 text-white text-sm px-3 py-1.5 rounded-md transition"
           >
@@ -276,7 +330,7 @@ function BuilderInner() {
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             nodeTypes={nodeTypes}
-            onNodeClick={(_, n) => setSelectedId(n.id)}
+            onNodeClick={(_, n) => setSelectedId(n.type === 'zoneNode' ? null : n.id)}
             onPaneClick={() => setSelectedId(null)}
             fitView
             proOptions={{ hideAttribution: true }}
@@ -291,9 +345,20 @@ function BuilderInner() {
       <NodeConfigPanel
         node={selectedNode}
         connectors={connectors}
+        fieldPickers={fieldPickers}
         onChange={updateNodeData}
+        onDelete={handleDeleteNode}
         onClose={() => setSelectedId(null)}
       />
+
+      {showFnPicker && (
+        <PickerModal
+          title="⚙️ Ajouter une fonction"
+          options={functionPickerOptions}
+          onSelect={addFunctionNode}
+          onClose={() => setShowFnPicker(false)}
+        />
+      )}
     </div>
   );
 }

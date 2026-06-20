@@ -9,8 +9,15 @@ export default function PipelinesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [runStatus, setRunStatus] = useState(null);
+  const [query, setQuery] = useState('');
   const requestLoadPipeline = useStudioStore((s) => s.requestLoadPipeline);
   const navigate = useNavigate();
+
+  const visible = pipelines.filter((p) => {
+    const q = query.toLowerCase().trim();
+    if (!q) return true;
+    return [p.name, p.id, p.description].filter(Boolean).some((s) => s.toLowerCase().includes(q));
+  });
 
   useEffect(() => {
     (async () => {
@@ -53,13 +60,20 @@ export default function PipelinesPage() {
         <h2 className="text-xl font-semibold text-white mb-1">📡 Pipelines pré-définis</h2>
         <p className="text-dark-400 text-sm mb-6">Chargez un pipeline en un clic, ou exécutez-le directement.</p>
 
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="🔍 Rechercher une pipeline…"
+          className="w-full bg-dark-950 border border-dark-700 rounded-md px-3 py-2 text-sm text-white mb-4 focus:outline-none focus:border-blue-500"
+        />
+
         {loading && <p className="text-dark-400 text-sm">Chargement…</p>}
         {error && (
           <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-3 text-red-400 text-sm">❌ {error}</div>
         )}
 
         <div className="space-y-3">
-          {pipelines.map((p) => (
+          {visible.map((p) => (
             <div key={p.id} className="border border-dark-700 bg-dark-900 rounded-lg p-4">
               <div className="flex items-center gap-3">
                 <span className="text-xl">🔧</span>

@@ -2,6 +2,8 @@
 // fields, plus arbitrary config key/value pairs. Values are coerced to
 // number/boolean where possible so the saved YAML keeps proper types.
 
+import { useState } from 'react';
+import PickerModal from './PickerModal';
 import { defaultConfigFor, triggerTypeFor } from '../lib/connectorTemplates';
 
 function coerce(v) {
@@ -12,7 +14,9 @@ function coerce(v) {
   return v.trim() !== '' && !Number.isNaN(n) ? n : v;
 }
 
-export default function NodeConfigPanel({ node, connectors = [], onChange, onClose }) {
+export default function NodeConfigPanel({ node, connectors = [], fieldPickers = {}, onChange, onDelete, onClose }) {
+  const [pickerKey, setPickerKey] = useState(null);
+
   if (!node) {
     return (
       <aside className="w-72 bg-dark-900 border-l border-dark-700 p-4 shrink-0">
@@ -102,22 +106,57 @@ export default function NodeConfigPanel({ node, connectors = [], onChange, onClo
         {Object.keys(config).length === 0 && (
           <p className="text-xs text-dark-500">Aucun paramètre. Ajoutez un champ.</p>
         )}
-        {Object.entries(config).map(([key, value]) => (
-          <div key={key} className="flex items-center gap-1">
-            <input
-              defaultValue={key}
-              onBlur={(e) => e.target.value !== key && e.target.value && renameKey(key, e.target.value)}
-              className="input w-24 text-xs"
-            />
-            <input
-              value={String(value ?? '')}
-              onChange={(e) => setConfig(key, e.target.value)}
-              className="input flex-1 text-xs"
-            />
-            <button onClick={() => removeKey(key)} className="text-dark-500 hover:text-red-400 px-1">×</button>
-          </div>
-        ))}
+        {Object.entries(config).map(([key, value]) => {
+          const hasPicker = (fieldPickers[key] || []).length > 0;
+          return (
+            <div key={key} className="flex items-center gap-1">
+              <input
+                defaultValue={key}
+                onBlur={(e) => e.target.value !== key && e.target.value && renameKey(key, e.target.value)}
+                className="input w-20 text-xs"
+              />
+              <input
+                value={String(value ?? '')}
+                onChange={(e) => setConfig(key, e.target.value)}
+                className="input flex-1 text-xs"
+              />
+              {hasPicker && (
+                <button
+                  onClick={() => setPickerKey(key)}
+                  title="Choisir parmi les options disponibles"
+                  className="text-dark-400 hover:text-blue-400 px-1"
+                >
+                  📋
+                </button>
+              )}
+              <button onClick={() => removeKey(key)} className="text-dark-500 hover:text-red-400 px-1">×</button>
+            </div>
+          );
+        })}
       </div>
+
+      {!isTrigger && onDelete && (
+        <button
+          onClick={() => onDelete(node.id)}
+          className="mt-5 w-full bg-red-600/80 hover:bg-red-600 text-white text-sm px-3 py-1.5 rounded-md transition"
+        >
+          🗑️ Supprimer le nœud
+        </button>
+      )}
+
+      {pickerKey && (
+        <PickerModal
+          title={`Choisir : ${pickerKey}`}
+          options={fieldPickers[pickerKey] || []}
+          allowCustom
+          customLabel={`${pickerKey} personnalisé`}
+          onSelect={(o) => {
+            setConfig(pickerKey, o.value);
+            setPickerKey(null);
+          }}
+          onClose={() => setPickerKey(null)}
+        />
+      )}
 
       <style>{`
         .input { width: 100%; background:#0f172a; border:1px solid #334155; border-radius:6px; padding:6px 8px; color:#e2e8f0; font-size:13px; }

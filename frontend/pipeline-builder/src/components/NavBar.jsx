@@ -13,7 +13,7 @@ export default function NavBar() {
   return (
     <header className="bg-dark-900 border-b border-dark-700 px-4 py-2.5 flex items-center gap-6 shrink-0">
       <div className="font-bold text-lg bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent whitespace-nowrap">
-        🧩 MindSet&nbsp;Studio
+        🧩 MindSet&nbsp;Data
       </div>
       <nav className="flex gap-1">
         {TABS.map(([to, label]) => (

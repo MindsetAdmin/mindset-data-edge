@@ -1,0 +1,13 @@
+# Build artifacts
+/bin/
+*.exe
+
+# Local runtime data (SQLite DB, generated files)
+/data/
+
+# Local Claude Code settings (launch.json is shared, settings.local.json is personal)
+/.claude/settings.local.json
+
+# Node
+node_modules/
+dist/

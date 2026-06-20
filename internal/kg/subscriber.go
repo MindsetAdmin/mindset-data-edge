@@ -63,6 +63,13 @@ func (s *KGSubscriber) onMicroStop(_ paho.Client, msg paho.Message) {
 		return
 	}
 
+	// Ignore empty/invalid events (e.g. a retained or malformed message) so the
+	// graph isn't polluted with blank nodes.
+	if event.WorkCenter == "" || event.Timestamp.IsZero() {
+		log.Printf("[KG] Skipping invalid micro-stop event (empty work_center or timestamp)")
+		return
+	}
+
 	log.Printf("[KG] Processing micro-stop: %s, duration: %.0fs, cost: %.2f€",
 		event.WorkCenter, event.Duration, event.CostEur)
 

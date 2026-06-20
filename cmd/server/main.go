@@ -71,8 +71,21 @@ func main() {
 		log.Printf("[API] No MQTT broker — MQTT handlers will error if a pipeline is run")
 	}
 
+	// Automatic Knowledge Graph enrichment: subscribe to events and write to the
+	// KG. The user never adds a kg_save node — the graph stays up to date by itself.
+	if mqttClient != nil {
+		if kgSub, err := kg.NewKGSubscriber("tcp://localhost:1883", kgInstance); err != nil {
+			log.Printf("[API] KG auto-enrichment unavailable: %v", err)
+		} else if err := kgSub.Start(); err != nil {
+			log.Printf("[API] KG subscriber failed to start: %v", err)
+		} else {
+			log.Printf("[API] KG auto-enrichment active (mindset/events/micro-stop)")
+			defer kgSub.Stop()
+		}
+	}
+
 	srv := &server{
-		funcRegistry: buildRegistry(hourlyRate, kgInstance, mqttClient),
+		funcRegistry: buildRegistry(hourlyRate, mqttClient),
 		kg:           kgInstance,
 		pipelinesDir: *pipelinesDir,
 		hourlyRate:   hourlyRate,
@@ -99,7 +112,7 @@ func main() {
 // buildRegistry registers every function. MQTT handlers get a real client when
 // one is available (for real execution); OPC-UA stays nil and errors gracefully
 // if run without a live server. Modbus/SQL are demo stubs.
-func buildRegistry(hourlyRate float64, kgInstance *kg.KnowledgeGraph, mqttClient mqtt.Client) *functions.Registry {
+func buildRegistry(hourlyRate float64, mqttClient mqtt.Client) *functions.Registry {
 	reg := functions.NewRegistry()
 
 	// Connectors
@@ -112,9 +125,6 @@ func buildRegistry(hourlyRate float64, kgInstance *kg.KnowledgeGraph, mqttClient
 	reg.Register(transforms.NewStateMachineHandler().GetFunction())
 	reg.Register(transforms.NewUNSMapperHandler("local").GetFunction())
 	reg.Register(transforms.NewFilterHandler().GetFunction())
-	// Passthrough transforms referenced by the predefined pipelines.
-	reg.Register(passthroughTransform("parse_json", "Parse un payload JSON (démo)"))
-	reg.Register(passthroughTransform("enrich_context", "Ajoute du contexte (démo)"))
 
 	// Calculates
 	reg.Register(calculates.NewDurationHandler().GetFunction())
@@ -123,26 +133,11 @@ func buildRegistry(hourlyRate float64, kgInstance *kg.KnowledgeGraph, mqttClient
 	// Conditions
 	reg.Register(conditions.NewThresholdHandler().GetFunction())
 
-	// Outputs
+	// Outputs — kg_save is intentionally NOT registered: the Knowledge Graph
+	// enriches itself automatically via the KG subscriber.
 	reg.Register(outputs.NewMQTTPublishHandler(mqttClient).GetFunction())
-	if kgInstance != nil {
-		reg.Register(outputs.NewKGSaveHandler(kgInstance).GetFunction())
-	}
 
 	return reg
-}
-
-// passthroughTransform returns a transform that passes its params through —
-// used for demo functions not yet implemented as real handlers.
-func passthroughTransform(name, desc string) *functions.Function {
-	return &functions.Function{
-		Name:        name,
-		Type:        functions.TypeTransform,
-		Description: desc,
-		Handler: func(p map[string]interface{}) (interface{}, error) {
-			return p, nil
-		},
-	}
 }
 
 // stubConnector returns a metadata-only connector whose handler errors if run.

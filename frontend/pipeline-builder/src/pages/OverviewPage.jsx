@@ -29,7 +29,7 @@ export default function OverviewPage() {
   return (
     <div className="h-full overflow-y-auto p-6">
       <div className="max-w-4xl mx-auto">
-        <h1 className="text-2xl font-bold text-white mb-1">🧩 MindSet Data — Pipeline Studio</h1>
+        <h1 className="text-2xl font-bold text-white mb-1">🧩 MindSet Data</h1>
         <p className="text-dark-400 text-sm mb-6">
           Construisez des pipelines industriels visuellement, exécutez-les, et explorez le graphe de connaissances.
         </p>

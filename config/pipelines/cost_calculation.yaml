@@ -12,37 +12,22 @@ trigger:
     qos: 1
 
 nodes:
-  - id: "parse_event"
-    name: "Parse Event"
-    type: "transform"
-    function: "parse_json"
-    config: {}
-    depends_on: ["trigger"]
-
-  - id: "calculate_cost"
-    name: "Calculate Cost"
+  - id: "cost"
+    name: "Cost"
     type: "calculate"
     function: "calculate_cost"
     config:
       hourly_rate: 85.0
       currency: "EUR"
-    depends_on: ["parse_event"]
+    depends_on: ["trigger"]
 
-  - id: "publish_cost"
+  - id: "mqtt_publish"
     name: "Publish Cost"
     type: "output"
     function: "mqtt_publish"
     config:
       topic: "mindset/events/micro-stop-cost"
       qos: 1
-    depends_on: ["calculate_cost"]
+    depends_on: ["cost"]
 
-  - id: "save_cost_to_kg"
-    name: "Save Cost to KG"
-    type: "output"
-    function: "kg_save"
-    config:
-      node_type: "cost"
-    depends_on: ["calculate_cost"]
-
-output: "publish_cost"
+output: "mqtt_publish"

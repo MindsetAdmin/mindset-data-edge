@@ -1,4 +1,15 @@
 import { useState, useEffect } from 'react';
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+} from 'recharts';
 import { fetchStats, fetchKnowledgeGraph } from '../api/client';
 
 export default function DashboardPage() {
@@ -33,6 +44,20 @@ export default function DashboardPage() {
       cancelled = true;
     };
   }, [reload]);
+
+  // Build time-series from the real KG events (ascending).
+  const hourly = stats?.hourly_cost || 85;
+  const chrono = [...events].reverse();
+  let cum = 0;
+  const chartData = chrono.map((e, i) => {
+    const cost = (Number(e.duration || 0) / 3600) * hourly;
+    cum += cost;
+    return {
+      name: e.createdAt ? new Date(e.createdAt).toLocaleDateString() : `#${i + 1}`,
+      duration: Number(Number(e.duration || 0).toFixed(1)),
+      cumCost: Number(cum.toFixed(2)),
+    };
+  });
 
   const downtime = stats?.total_downtime_seconds || 0;
   const cards = [
@@ -74,6 +99,35 @@ export default function DashboardPage() {
             </div>
           ))}
         </div>
+
+        {chartData.length > 0 && (
+          <div className="grid gap-4 lg:grid-cols-2 mb-8">
+            <div className="bg-dark-900 border border-dark-700 rounded-lg p-4">
+              <h3 className="text-sm font-medium text-dark-300 mb-3">⏱️ Durée des micro-arrêts (s)</h3>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                  <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 11 }} />
+                  <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} />
+                  <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0' }} />
+                  <Bar dataKey="duration" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="bg-dark-900 border border-dark-700 rounded-lg p-4">
+              <h3 className="text-sm font-medium text-dark-300 mb-3">💰 Coût cumulé (€)</h3>
+              <ResponsiveContainer width="100%" height={200}>
+                <LineChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                  <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 11 }} />
+                  <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} />
+                  <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0' }} />
+                  <Line type="monotone" dataKey="cumCost" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        )}
 
         <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider mb-3">Événements récents</h3>
         <div className="bg-dark-900 border border-dark-700 rounded-lg overflow-hidden">
