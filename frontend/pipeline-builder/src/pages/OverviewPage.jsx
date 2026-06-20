@@ -14,8 +14,6 @@ export default function OverviewPage() {
   const cards = [
     { label: 'Pipelines', value: stats?.pipelines, icon: '🔧' },
     { label: 'Fonctions', value: stats?.functions, icon: '⚙️' },
-    { label: 'Micro-arrêts', value: stats?.micro_stops, icon: '🔴' },
-    { label: 'Nœuds KG', value: stats?.kg_nodes, icon: '🧠' },
   ];
 
   const steps = [
@@ -40,7 +38,7 @@ export default function OverviewPage() {
           </div>
         )}
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-8">
+        <div className="grid grid-cols-2 gap-3 mb-8 max-w-md">
           {cards.map((c) => (
             <div key={c.label} className="bg-dark-900 border border-dark-700 rounded-lg p-4 text-center">
               <div className="text-2xl mb-1">{c.icon}</div>

@@ -160,6 +160,13 @@ function BuilderInner() {
     [setNodes, setEdges]
   );
 
+  // Refresh picker options (live tags / machines / topics) each time a node is
+  // selected, so the opcua_read tag picker always shows current discovered tags.
+  useEffect(() => {
+    if (selectedId) loadPickerOptions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
+
   const selectedNode = nodes.find((n) => n.id === selectedId) || null;
   const connectors = functions.filter((f) => f.type === 'connector');
   const functionPickerOptions = functions
@@ -265,7 +272,7 @@ function BuilderInner() {
 
   return (
     <div className="flex h-full">
-      <Palette functions={functions} loading={loading} error={error} />
+      <Palette functions={functions.filter((f) => f.type !== 'connector')} loading={loading} error={error} />
 
       <div className="flex-1 flex flex-col min-w-0">
         {/* Toolbar */}
