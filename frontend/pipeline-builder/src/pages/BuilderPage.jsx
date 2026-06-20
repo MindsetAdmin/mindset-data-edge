@@ -17,9 +17,19 @@ import PickerModal from '../components/PickerModal';
 import PipelineNode from '../components/nodes/PipelineNode';
 import TriggerNode from '../components/nodes/TriggerNode';
 import ZoneNode from '../components/nodes/ZoneNode';
-import { fetchFunctions, fetchPipelines, createPipeline, runPipeline, fetchKnowledgeGraph, fetchTags } from '../api/client';
+import {
+  fetchFunctions,
+  fetchPipelines,
+  createPipeline,
+  runPipeline,
+  fetchTags,
+  fetchMachines,
+  fetchTopics,
+  fetchConfig,
+} from '../api/client';
 import { getCategory } from '../lib/functionMeta';
 import { defaultConfigFor, triggerTypeFor } from '../lib/connectorTemplates';
+import { defaultFunctionConfig } from '../lib/functionDefaults';
 import {
   flowToPipeline,
   pipelineToFlow,
@@ -46,6 +56,7 @@ function BuilderInner() {
   const [status, setStatus] = useState(null);
   const [showFnPicker, setShowFnPicker] = useState(false);
   const [fieldPickers, setFieldPickers] = useState({ machine_id: [], topic: [], broker: [], node_id: [] });
+  const [configDefaults, setConfigDefaults] = useState(null);
 
   const { screenToFlowPosition } = useReactFlow();
 
@@ -60,36 +71,48 @@ function BuilderInner() {
   }, []);
 
   async function loadPickerOptions() {
-    const brokers = [
-      { value: 'tcp://localhost:1883', label: 'tcp://localhost:1883', badge: 'défaut' },
-      { value: 'tcp://192.168.1.100:1883', label: 'tcp://192.168.1.100:1883' },
-      { value: 'tcp://factory-mqtt.internal:1883', label: 'tcp://factory-mqtt.internal:1883' },
-    ];
     let machine_id = [];
     let topic = [];
     let node_id = [];
+    let broker = [];
+    // Machines (with live status) + their tags grouped by machine.
     try {
-      const domain = await fetchKnowledgeGraph('domain');
-      machine_id = (domain.nodes || [])
-        .filter((n) => n.type === 'Equipment')
-        .map((n) => ({ value: n.properties?.work_center || n.label, label: n.label, sub: 'machine' }));
+      const m = await fetchMachines();
+      machine_id = (m.machines || [])
+        .filter((x) => x.work_center !== '(autres)')
+        .map((x) => ({
+          value: x.work_center,
+          label: x.work_center,
+          sub: x.state ? (x.state.running ? 'Running ✅' : 'Stopped ❌') : `${x.tags.length} tags`,
+        }));
+      node_id = (m.machines || []).flatMap((x) =>
+        (x.tags || []).map((t) => ({
+          value: t.node_id,
+          label: t.name || t.node_id,
+          sub: `valeur: ${t.value} · ${t.data_type}`,
+          badge: t.node_id,
+          group: x.work_center,
+        }))
+      );
     } catch { /* best-effort */ }
+    // Live MQTT topics with msg/s + category.
     try {
-      const tech = await fetchKnowledgeGraph('technical');
-      topic = (tech.nodes || [])
-        .filter((n) => n.type === 'topic')
-        .map((n) => ({ value: n.name, label: n.name, sub: 'topic MQTT' }));
-    } catch { /* best-effort */ }
-    try {
-      const t = await fetchTags();
-      node_id = (t.tags || []).map((tag) => ({
-        value: tag.node_id,
-        label: tag.name || tag.node_id,
-        sub: `valeur: ${tag.value} · ${tag.data_type}`,
-        badge: tag.node_id,
+      const tp = await fetchTopics();
+      topic = (tp.topics || []).map((t) => ({
+        value: t.topic,
+        label: t.topic,
+        sub: `${t.rate_per_sec.toFixed(1)} msg/s`,
+        group: t.category,
       }));
     } catch { /* best-effort */ }
-    setFieldPickers({ machine_id, topic, broker: brokers, node_id });
+    // Broker from agent.yaml.
+    try {
+      const c = await fetchConfig();
+      setConfigDefaults(c);
+      if (c.mqtt?.broker) broker = [{ value: c.mqtt.broker, label: c.mqtt.broker, badge: 'config' }];
+    } catch { /* best-effort */ }
+    if (broker.length === 0) broker = [{ value: 'tcp://localhost:1883', label: 'tcp://localhost:1883', badge: 'défaut' }];
+    setFieldPickers({ machine_id, topic, broker, node_id });
   }
 
   async function loadFunctions() {
@@ -132,8 +155,8 @@ function BuilderInner() {
       const fn = JSON.parse(raw);
       const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
       const id = `${slugify(fn.name)}_${Math.random().toString(36).slice(2, 7)}`;
-      // Connector nodes get their default config template pre-filled.
-      const config = fn.type === 'connector' ? defaultConfigFor(fn.name) : {};
+      // Seed sensible default config so config fields + pickers appear.
+      const config = fn.type === 'connector' ? defaultConfigFor(fn.name) : defaultFunctionConfig(fn.name);
       setNodes((nds) =>
         nds.concat({
           id,
@@ -180,7 +203,7 @@ function BuilderInner() {
         id,
         type: 'pipelineNode',
         position: { x: 300 + Math.random() * 160, y: 90 + Math.random() * 240 },
-        data: { name: o.value, type: o.fnType, function: o.value, config: {}, category: getCategory(o.fnType) },
+        data: { name: o.value, type: o.fnType, function: o.value, config: defaultFunctionConfig(o.value), category: getCategory(o.fnType) },
       })
     );
     setShowFnPicker(false);
@@ -255,7 +278,12 @@ function BuilderInner() {
       ...d,
       function: pendingConnector.name,
       triggerType: triggerTypeFor(pendingConnector.name),
-      config: defaultConfigFor(pendingConnector.name),
+      config: {
+        ...defaultConfigFor(pendingConnector.name),
+        ...(pendingConnector.name === 'opcua_read' && configDefaults?.opcua?.endpoint
+          ? { endpoint: configDefaults.opcua.endpoint }
+          : {}),
+      },
     }));
     setStatus({ type: 'ok', msg: `Connecteur « ${pendingConnector.name} » appliqué au trigger.` });
     clearPending();
@@ -363,6 +391,7 @@ function BuilderInner() {
         node={selectedNode}
         connectors={connectors}
         fieldPickers={fieldPickers}
+        configDefaults={configDefaults}
         onChange={updateNodeData}
         onDelete={handleDeleteNode}
         onClose={() => setSelectedId(null)}

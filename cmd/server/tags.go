@@ -6,8 +6,6 @@ import (
 	"log"
 	"sort"
 	"sync"
-
-	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
 // Tag mirrors the raw OPC-UA payload published by the agent (mqtt/publisher.go
@@ -97,17 +95,4 @@ func (r *TagRegistry) list() []Tag {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].NodeID < out[j].NodeID })
 	return out
-}
-
-// startTagSubscriber subscribes to mindset/raw/# and keeps the registry current.
-func (r *TagRegistry) startTagSubscriber(client mqtt.Client) error {
-	tok := client.Subscribe("mindset/raw/#", 0, func(_ mqtt.Client, m mqtt.Message) {
-		var t Tag
-		if err := json.Unmarshal(m.Payload(), &t); err != nil || t.NodeID == "" {
-			return
-		}
-		r.upsert(t)
-	})
-	tok.Wait()
-	return tok.Error()
 }

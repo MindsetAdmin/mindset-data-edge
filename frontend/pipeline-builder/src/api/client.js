@@ -58,6 +58,24 @@ export async function fetchTags() {
     return response.json();
 }
 
+export async function fetchMachines() {
+    const response = await fetch(`${API_BASE}/machines`);
+    if (!response.ok) throw new Error(`Failed to fetch machines: ${response.statusText}`);
+    return response.json();
+}
+
+export async function fetchTopics() {
+    const response = await fetch(`${API_BASE}/topics`);
+    if (!response.ok) throw new Error(`Failed to fetch topics: ${response.statusText}`);
+    return response.json();
+}
+
+export async function fetchConfig() {
+    const response = await fetch(`${API_BASE}/config`);
+    if (!response.ok) throw new Error(`Failed to fetch config: ${response.statusText}`);
+    return response.json();
+}
+
 export async function fetchStats() {
     const response = await fetch(`${API_BASE}/stats`);
     if (!response.ok) {

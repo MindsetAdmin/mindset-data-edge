@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -39,6 +40,10 @@ type server struct {
 	pipelinesDir string
 	hourlyRate   float64
 	tags         *TagRegistry
+	topics       *TopicRegistry
+	states       *StateTracker
+	cfg          *config.Config
+	mqttClient   mqtt.Client
 }
 
 func main() {
@@ -48,12 +53,19 @@ func main() {
 	addr := flag.String("addr", ":8080", "HTTP listen address (matches the Vite dev proxy)")
 	flag.Parse()
 
-	// Config is optional — fall back to a sane default hourly rate if absent.
+	// Config is optional — fall back to defaults if absent.
+	cfg, cfgErr := config.LoadConfig(*cfgPath)
+	if cfgErr != nil {
+		log.Printf("[API] ⚠️ Could not load %s (%v); using defaults", *cfgPath, cfgErr)
+		cfg = &config.Config{}
+	}
 	hourlyRate := 85.0
-	if cfg, err := config.LoadConfig(*cfgPath); err != nil {
-		log.Printf("[API] ⚠️ Could not load %s (%v); using defaults", *cfgPath, err)
-	} else if cfg.Cost.HourlyCost > 0 {
+	if cfg.Cost.HourlyCost > 0 {
 		hourlyRate = cfg.Cost.HourlyCost
+	}
+	broker := cfg.Mqtt.Broker
+	if broker == "" {
+		broker = "tcp://localhost:1883"
 	}
 
 	kgInstance, err := kg.NewKnowledgeGraph(*dbPath)
@@ -63,19 +75,17 @@ func main() {
 	defer kgInstance.Close()
 
 	// Best-effort MQTT connection so "Run" can actually execute MQTT handlers.
-	// If no broker is reachable, those handlers fail gracefully at run time.
-	mqttClient := connectMQTT("tcp://localhost:1883")
+	mqttClient := connectMQTT(broker)
 	if mqttClient != nil {
-		log.Printf("[API] MQTT connected — real execution enabled for MQTT handlers")
+		log.Printf("[API] MQTT connected (%s)", broker)
 		defer mqttClient.Disconnect(250)
 	} else {
-		log.Printf("[API] No MQTT broker — MQTT handlers will error if a pipeline is run")
+		log.Printf("[API] No MQTT broker at %s — live data and Run will be limited", broker)
 	}
 
-	// Automatic Knowledge Graph enrichment: subscribe to events and write to the
-	// KG. The user never adds a kg_save node — the graph stays up to date by itself.
+	// Automatic Knowledge Graph enrichment from events.
 	if mqttClient != nil {
-		if kgSub, err := kg.NewKGSubscriber("tcp://localhost:1883", kgInstance); err != nil {
+		if kgSub, err := kg.NewKGSubscriber(broker, kgInstance); err != nil {
 			log.Printf("[API] KG auto-enrichment unavailable: %v", err)
 		} else if err := kgSub.Start(); err != nil {
 			log.Printf("[API] KG subscriber failed to start: %v", err)
@@ -85,14 +95,17 @@ func main() {
 		}
 	}
 
-	// Live OPC-UA tag registry: learns tags from mindset/raw/# (published by the
-	// agent) so the builder can show real discovered tags + values.
+	// Live data hub: one mindset/# subscription feeding the tag registry, topic
+	// stats (rates), and machine state tracking (Running/Stopped + transitions).
 	tagReg := NewTagRegistry(kgInstance.Store().DB())
+	topicReg := NewTopicRegistry()
+	stateTracker := NewStateTracker()
 	if mqttClient != nil {
-		if err := tagReg.startTagSubscriber(mqttClient); err != nil {
-			log.Printf("[API] Tag subscriber failed: %v", err)
+		hub := NewLiveHub(tagReg, topicReg, stateTracker)
+		if err := hub.Start(mqttClient); err != nil {
+			log.Printf("[API] Live data hub failed: %v", err)
 		} else {
-			log.Printf("[API] Tag discovery active (mindset/raw/#)")
+			log.Printf("[API] Live data active (tags, topics, machine state from mindset/#)")
 		}
 	}
 
@@ -102,6 +115,10 @@ func main() {
 		pipelinesDir: *pipelinesDir,
 		hourlyRate:   hourlyRate,
 		tags:         tagReg,
+		topics:       topicReg,
+		states:       stateTracker,
+		cfg:          cfg,
+		mqttClient:   mqttClient,
 	}
 
 	mux := http.NewServeMux()
@@ -110,6 +127,9 @@ func main() {
 	mux.HandleFunc("/api/pipelines", srv.handlePipelines)          // GET list, POST save
 	mux.HandleFunc("/api/pipelines/{id}/run", srv.handleRunPipeline) // POST execute
 	mux.HandleFunc("/api/tags", srv.handleTags)
+	mux.HandleFunc("/api/machines", srv.handleMachines)
+	mux.HandleFunc("/api/topics", srv.handleTopics)
+	mux.HandleFunc("/api/config", srv.handleConfig)
 	mux.HandleFunc("/api/kg/technical", srv.handleTechnicalGraph)
 	mux.HandleFunc("/api/kg/domain", srv.handleDomainGraph)
 	mux.HandleFunc("/api/stats", srv.handleStats)
@@ -319,6 +339,72 @@ func (s *server) handleRunPipeline(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleTags(w http.ResponseWriter, r *http.Request) {
 	list := s.tags.list()
 	writeJSON(w, map[string]interface{}{"tags": list, "total": len(list)})
+}
+
+// handleMachines groups discovered tags by work center (the part of the tag name
+// before the dot) and attaches the live Running/Stopped state when known.
+func (s *server) handleMachines(w http.ResponseWriter, r *http.Request) {
+	groups := map[string][]Tag{}
+	for _, t := range s.tags.list() {
+		wc, ok := workCenterOf(t.Name)
+		if !ok {
+			wc = "(autres)"
+		}
+		groups[wc] = append(groups[wc], t)
+	}
+
+	type machine struct {
+		WorkCenter string        `json:"work_center"`
+		Tags       []Tag         `json:"tags"`
+		State      *MachineState `json:"state,omitempty"`
+	}
+	machines := make([]machine, 0, len(groups))
+	for wc, tags := range groups {
+		machines = append(machines, machine{WorkCenter: wc, Tags: tags, State: s.states.get(wc)})
+	}
+	sort.Slice(machines, func(i, j int) bool { return machines[i].WorkCenter < machines[j].WorkCenter })
+	writeJSON(w, map[string]interface{}{"machines": machines, "total": len(machines)})
+}
+
+func (s *server) handleTopics(w http.ResponseWriter, r *http.Request) {
+	connected := s.mqttClient != nil && s.mqttClient.IsConnected()
+	list := s.topics.list()
+	writeJSON(w, map[string]interface{}{
+		"topics":           list,
+		"total":            len(list),
+		"broker_connected": connected,
+		"broker":           brokerOrDefault(s.cfg),
+	})
+}
+
+// handleConfig exposes a safe subset of agent.yaml so the UI can pre-fill fields.
+func (s *server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	currency := "EUR"
+	writeJSON(w, map[string]interface{}{
+		"opcua": map[string]interface{}{
+			"endpoint":        s.cfg.OpcUA.Endpoint,
+			"security_mode":   orDefault(s.cfg.OpcUA.SecurityMode, "None"),
+			"security_policy": orDefault(s.cfg.OpcUA.SecurityPolicy, "None"),
+			"timeout":         5000,
+		},
+		"mqtt": map[string]interface{}{"broker": brokerOrDefault(s.cfg)},
+		"cost": map[string]interface{}{"hourly_rate": s.hourlyRate, "currency": currency},
+		"site": map[string]interface{}{"id": orDefault(s.cfg.Site.ID, "local-test"), "name": s.cfg.Site.Name, "area": "area1"},
+	})
+}
+
+func brokerOrDefault(cfg *config.Config) string {
+	if cfg != nil && cfg.Mqtt.Broker != "" {
+		return cfg.Mqtt.Broker
+	}
+	return "tcp://localhost:1883"
+}
+
+func orDefault(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
 }
 
 func (s *server) handleTechnicalGraph(w http.ResponseWriter, r *http.Request) {

@@ -14,7 +14,7 @@ function coerce(v) {
   return v.trim() !== '' && !Number.isNaN(n) ? n : v;
 }
 
-export default function NodeConfigPanel({ node, connectors = [], fieldPickers = {}, onChange, onDelete, onClose }) {
+export default function NodeConfigPanel({ node, connectors = [], fieldPickers = {}, configDefaults = null, onChange, onDelete, onClose }) {
   const [pickerKey, setPickerKey] = useState(null);
 
   if (!node) {
@@ -56,7 +56,12 @@ export default function NodeConfigPanel({ node, connectors = [], fieldPickers = 
       ...d,
       function: fnName,
       triggerType: triggerTypeFor(fnName),
-      config: defaultConfigFor(fnName),
+      config: {
+        ...defaultConfigFor(fnName),
+        ...(fnName === 'opcua_read' && configDefaults?.opcua?.endpoint
+          ? { endpoint: configDefaults.opcua.endpoint }
+          : {}),
+      },
     }));
 
   return (

@@ -11,8 +11,15 @@ type Config struct {
 	Site      SiteConfig      `yaml:"site"`
 	OpcUA     OpcUAConfig     `yaml:"opcua"`
 	Discovery DiscoveryConfig `yaml:"discovery"`
+	Mqtt      MqttConfig      `yaml:"mqtt"`
 	Cloud     CloudConfig     `yaml:"cloud"`
 	Cost      CostConfig      `yaml:"cost"`
+}
+
+type MqttConfig struct {
+	Broker            string `yaml:"broker"`
+	RawTopicPrefix    string `yaml:"raw_topic_prefix"`
+	EventsTopicPrefix string `yaml:"events_topic_prefix"`
 }
 
 type SiteConfig struct {
