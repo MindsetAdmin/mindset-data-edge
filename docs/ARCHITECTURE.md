@@ -230,7 +230,66 @@ ReactFlow nodes `nodes/{PipelineNode,TriggerNode,ZoneNode}`.
 
 ---
 
-## 7. Project structure
+## 7. Frontend ↔ Backend connection
+
+The browser **only ever talks to the API server** (`cmd/server`, port `:8080`).
+There are exactly **two channels**:
+
+1. **REST over HTTP** — request/response for everything (load + actions).
+2. **WebSocket** — one persistent connection for live server→browser push.
+
+### 7.1 Request lifecycle (dev)
+```
+Browser (React, :5173)
+   │  fetch('/api/...')              │  new WebSocket('ws://host/api/ws')
+   ▼                                 ▼
+Vite dev server (:5173)  ── proxy '/api' (http + ws:true) ──►  Go API server (:8080)
+                                                                 ├─ REST handlers (mux)
+                                                                 └─ wsHub  (/api/ws)
+```
+In dev, Vite proxies every `/api/*` call (including the WebSocket upgrade) to
+`:8080`, so the browser uses same‑origin URLs and there are no CORS issues. In a
+production build you serve the static frontend and point it at the API host
+(CORS is already enabled server‑side via `withCORS`).
+
+### 7.2 Which scripts are responsible
+
+**Frontend (`frontend/pipeline-builder/`)**
+| File | Responsibility |
+|---|---|
+| `vite.config.js` | Dev proxy: forwards `/api` → `http://localhost:8080`, with `ws: true` so the `/api/ws` **WebSocket** upgrade is proxied too. |
+| `src/api/client.js` | **All REST calls.** Wraps `fetch('/api/...')` — `fetchFunctions`, `fetchConnectors`, `fetchPipelines`, `createPipeline`, `runPipeline`, `fetchTags`, `fetchMachines`, `fetchTopics`, `fetchConfig`, `fetchStats`, `fetchKnowledgeGraph`. |
+| `src/lib/useLiveSocket.js` | **WebSocket client.** React hook that connects to `/api/ws`, auto‑reconnects, and calls back on each `{type,data}` message. |
+| pages/components | Call `client.js` for data and (Dashboard) `useLiveSocket` for live push. |
+
+**Backend (`cmd/server/`)**
+| File | Responsibility |
+|---|---|
+| `main.go` | Creates the `http.ServeMux`, registers every `/api/*` route, wraps it in `withCORS`, and serves on `:8080` (`http.ListenAndServe`). Contains the REST handlers. |
+| `ws.go` | `wsHub` — upgrades `/api/ws` to a WebSocket and broadcasts `{type,data}` messages to all connected clients. |
+| `live.go` | `LiveHub` — subscribes to MQTT `mindset/#` and calls `wsHub.broadcast(...)` so tag/state/event changes are pushed to the browser in real time. |
+| `tags.go` | Tag registry behind `GET /api/tags`. |
+
+### 7.3 End‑to‑end example (a micro‑stop appears)
+```
+Agent → MQTT mindset/events/micro-stop
+   → cmd/server live.go (LiveHub) receives it
+   → ws.go wsHub.broadcast({type:"event", ...})
+   → browser useLiveSocket onmessage
+   → DashboardPage triggers a debounced refresh()
+   → client.js re-fetches /api/stats + /api/kg/domain
+   → KPIs/charts update (~sub-second)
+```
+
+> Note: the OPC‑UA connection, tag discovery, raw publishing and UNS
+> contextualization currently run inside **`cmd/agent`** and are **not yet
+> controllable from the frontend** — the UI observes their results via the API.
+> Adding a control plane (`POST /api/opcua/connect`, `/browse`, `/subscribe`,
+> `/uns/start`) to `cmd/server` would let the browser drive them directly.
+
+---
+
+## 8. Project structure
 
 ```
 mindset-data-edge/
@@ -268,7 +327,7 @@ mindset-data-edge/
 
 ---
 
-## 8. Running it
+## 9. Running it
 
 ### One command (Windows)
 ```powershell
@@ -296,7 +355,7 @@ still runs; live values/rates/state are limited and persisted tags are shown.
 
 ---
 
-## 9. Notes & limitations
+## 10. Notes & limitations
 - **TRS** on the dashboard is an *availability proxy* (downtime vs an 8h shift);
   true OEE needs production‑count + quality data not yet captured.
 - **"vs hier"** deltas need events spanning two days to show a baseline.

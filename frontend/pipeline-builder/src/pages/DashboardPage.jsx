@@ -12,6 +12,7 @@ import {
 import { fetchStats, fetchKnowledgeGraph, fetchMachines, fetchConfig } from '../api/client';
 import { buildEvents, effectiveCost, splitDays, deltaPct, paretoCauses } from '../lib/dashboardData';
 import { useLiveSocket } from '../lib/useLiveSocket';
+import LiveDataPanel from '../components/LiveDataPanel';
 
 const FALLBACK_MS = 20000; // safety heartbeat; real-time comes from the WebSocket
 
@@ -113,6 +114,9 @@ export default function DashboardPage() {
           <Kpi icon="⏱️" label="Temps perdu" value={fmtDuration(downtimeToday)} unit="aujourd'hui" delta={deltaPct(downtimeToday, downtimeYest)} invert />
           <Kpi icon="📈" label="Disponibilité" value={`${availability.toFixed(1)}%`} unit="TRS (dispo.)" />
         </div>
+
+        {/* Live, user-selected tag data */}
+        <LiveDataPanel />
 
         {/* Pareto */}
         <Panel title="📈 Pareto des causes">
