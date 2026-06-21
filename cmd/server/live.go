@@ -113,16 +113,17 @@ func NewStateTracker() *StateTracker {
 }
 
 // observe records a status value for a work center and detects transitions.
-func (t *StateTracker) observe(workCenter string, running bool, ts time.Time) {
+// It returns true when the known state changed (first observation or a flip).
+func (t *StateTracker) observe(workCenter string, running bool, ts time.Time) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	st := t.states[workCenter]
 	if st == nil {
 		t.states[workCenter] = &MachineState{Running: running, Since: ts}
-		return
+		return true
 	}
 	if st.Running == running {
-		return
+		return false
 	}
 	dur := ts.Sub(st.Since).Seconds()
 	st.History = append(st.History, Transition{From: st.Running, To: running, At: ts, DurationSec: dur})
@@ -131,6 +132,7 @@ func (t *StateTracker) observe(workCenter string, running bool, ts time.Time) {
 	}
 	st.Running = running
 	st.Since = ts
+	return true
 }
 
 func (t *StateTracker) get(workCenter string) *MachineState {
@@ -145,10 +147,18 @@ type LiveHub struct {
 	tags   *TagRegistry
 	topics *TopicRegistry
 	states *StateTracker
+	// broadcast pushes a typed message to WebSocket clients (nil = no-op).
+	broadcast func(msgType string, data interface{})
 }
 
 func NewLiveHub(tags *TagRegistry, topics *TopicRegistry, states *StateTracker) *LiveHub {
 	return &LiveHub{tags: tags, topics: topics, states: states}
+}
+
+func (h *LiveHub) emit(t string, data interface{}) {
+	if h.broadcast != nil {
+		h.broadcast(t, data)
+	}
 }
 
 // Start subscribes to mindset/# and dispatches every message.
@@ -157,17 +167,30 @@ func (h *LiveHub) Start(client mqtt.Client) error {
 		now := time.Now()
 		h.topics.record(m.Topic(), now.UnixMilli())
 
+		// Micro-stop events → push to dashboards in real time.
+		if strings.HasPrefix(m.Topic(), "mindset/events/") {
+			var evt map[string]interface{}
+			if json.Unmarshal(m.Payload(), &evt) == nil {
+				evt["_topic"] = m.Topic()
+				h.emit("event", evt)
+			}
+			return
+		}
+
 		if strings.HasPrefix(m.Topic(), "mindset/raw/") {
 			var t Tag
 			if err := json.Unmarshal(m.Payload(), &t); err != nil || t.NodeID == "" {
 				return
 			}
 			h.tags.upsert(t)
+			h.emit("tag", t)
 
 			// Status tags (e.g. machine1.status, boolean) drive state tracking.
 			if wc, ok := workCenterOf(t.Name); ok && isStatusTag(t.Name) {
 				if b, ok := toBool(t.Value); ok {
-					h.states.observe(wc, b, now)
+					if changed := h.states.observe(wc, b, now); changed {
+						h.emit("state", map[string]interface{}{"work_center": wc, "running": b})
+					}
 				}
 			}
 		}

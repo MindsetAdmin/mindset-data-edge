@@ -101,8 +101,10 @@ func main() {
 	tagReg := NewTagRegistry(kgInstance.Store().DB())
 	topicReg := NewTopicRegistry()
 	stateTracker := NewStateTracker()
+	wsHubInstance := newWSHub()
 	if mqttClient != nil {
 		hub := NewLiveHub(tagReg, topicReg, stateTracker)
+		hub.broadcast = wsHubInstance.broadcast // push live updates to WebSocket clients
 		if err := hub.Start(mqttClient); err != nil {
 			log.Printf("[API] Live data hub failed: %v", err)
 		} else {
@@ -138,6 +140,7 @@ func main() {
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"status": "ok"})
 	})
+	mux.HandleFunc("/api/ws", wsHubInstance.handle) // WebSocket: live push to the UI
 
 	log.Printf("[API] Config: %s | DB: %s | Pipelines: %s", *cfgPath, *dbPath, *pipelinesDir)
 	log.Printf("[API] Registered %d functions", len(srv.funcRegistry.List()))

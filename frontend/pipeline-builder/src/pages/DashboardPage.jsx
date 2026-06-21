@@ -11,8 +11,9 @@ import {
 } from 'recharts';
 import { fetchStats, fetchKnowledgeGraph, fetchMachines, fetchConfig } from '../api/client';
 import { buildEvents, effectiveCost, splitDays, deltaPct, paretoCauses } from '../lib/dashboardData';
+import { useLiveSocket } from '../lib/useLiveSocket';
 
-const REFRESH_MS = 5000;
+const FALLBACK_MS = 20000; // safety heartbeat; real-time comes from the WebSocket
 
 export default function DashboardPage() {
   const [stats, setStats] = useState(null);
@@ -21,7 +22,8 @@ export default function DashboardPage() {
   const [config, setConfig] = useState(null);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [error, setError] = useState(null);
-  const timer = useRef(null);
+  const refreshRef = useRef(null);
+  const debounceRef = useRef(null);
 
   async function refresh() {
     try {
@@ -41,11 +43,26 @@ export default function DashboardPage() {
       setError(e.message);
     }
   }
+  refreshRef.current = refresh;
+
+  // Debounce so a burst of WS messages triggers a single re-fetch.
+  const scheduleRefresh = () => {
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => refreshRef.current(), 500);
+  };
+
+  // Real-time push: any live message triggers a (debounced) refresh.
+  const connected = useLiveSocket((msg) => {
+    if (msg.type === 'event' || msg.type === 'state' || msg.type === 'tag') scheduleRefresh();
+  });
 
   useEffect(() => {
     refresh();
-    timer.current = setInterval(refresh, REFRESH_MS);
-    return () => clearInterval(timer.current);
+    const t = setInterval(() => refreshRef.current(), FALLBACK_MS);
+    return () => {
+      clearInterval(t);
+      clearTimeout(debounceRef.current);
+    };
   }, []);
 
   const hourly = stats?.hourly_cost || 85;
@@ -63,7 +80,7 @@ export default function DashboardPage() {
   const availability = Math.max(0, Math.min(1, 1 - downtimeToday / SHIFT)) * 100;
 
   const pareto = paretoCauses(events);
-  const connected = stats?.broker_connected;
+  const brokerConnected = stats?.broker_connected;
 
   return (
     <div className="h-full overflow-y-auto p-5">
@@ -73,10 +90,14 @@ export default function DashboardPage() {
           <span className="font-semibold text-white">📊 MindSet Data — Dashboard</span>
           <span className="text-dark-400">Site : <span className="text-dark-200">{config?.site?.name || config?.site?.id || '—'}</span></span>
           <span className="text-dark-400">
-            Statut : <span className={connected ? 'text-green-400' : 'text-red-400'}>{connected ? '🟢 Connecté' : '🔴 Déconnecté'}</span>
+            Statut : <span className={brokerConnected ? 'text-green-400' : 'text-red-400'}>{brokerConnected ? '🟢 Connecté' : '🔴 Déconnecté'}</span>
           </span>
           <span className="text-dark-400">Uptime : <span className="text-dark-200">{fmtDuration(stats?.uptime_seconds)}</span></span>
-          <span className="text-dark-400 ml-auto">MàJ : {lastUpdate ? lastUpdate.toLocaleTimeString() : '—'}</span>
+          <span className={`ml-auto inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${connected ? 'bg-green-500/15 text-green-400' : 'bg-dark-700 text-dark-400'}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-green-400 animate-pulse' : 'bg-dark-500'}`} />
+            {connected ? 'LIVE (WebSocket)' : 'hors-ligne'}
+          </span>
+          <span className="text-dark-400">MàJ : {lastUpdate ? lastUpdate.toLocaleTimeString() : '—'}</span>
         </div>
 
         {error && (
