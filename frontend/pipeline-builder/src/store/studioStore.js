@@ -4,9 +4,9 @@ import { create } from 'zustand';
 // consumes them on mount and clears them.
 export const useStudioStore = create((set) => ({
   pendingConnector: null, // a connector FunctionInfo to apply to the trigger node
-  pipelineToLoad: null, // a pipeline id to load onto the canvas
+  pipelineToLoad: null, // a full pipeline object to load onto the canvas
 
   selectConnector: (fn) => set({ pendingConnector: fn }),
-  requestLoadPipeline: (id) => set({ pipelineToLoad: id }),
+  requestLoadPipeline: (pipeline) => set({ pipelineToLoad: pipeline }),
   clearPending: () => set({ pendingConnector: null, pipelineToLoad: null }),
 }));

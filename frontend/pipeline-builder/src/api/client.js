@@ -39,6 +39,14 @@ export async function fetchPipelines() {
     return response.json();
 }
 
+export async function fetchExamplePipelines() {
+    const response = await fetch(`${API_BASE}/pipelines/examples`);
+    if (!response.ok) {
+        throw new Error(`Failed to fetch example pipelines: ${response.statusText}`);
+    }
+    return response.json();
+}
+
 export async function runPipeline(id) {
     const response = await fetch(`${API_BASE}/pipelines/${encodeURIComponent(id)}/run`, {
         method: 'POST',

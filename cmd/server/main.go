@@ -128,7 +128,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/functions", srv.handleFunctions)
 	mux.HandleFunc("/api/connectors", srv.handleConnectors)
-	mux.HandleFunc("/api/pipelines", srv.handlePipelines)          // GET list, POST save
+	mux.HandleFunc("/api/pipelines", srv.handlePipelines)           // GET list, POST save
+	mux.HandleFunc("/api/pipelines/examples", srv.handleExamplePipelines) // GET templates
 	mux.HandleFunc("/api/pipelines/{id}/run", srv.handleRunPipeline) // POST execute
 	mux.HandleFunc("/api/tags", srv.handleTags)
 	mux.HandleFunc("/api/machines", srv.handleMachines)
@@ -243,6 +244,19 @@ func (s *server) handlePipelines(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) listPipelines(w http.ResponseWriter, r *http.Request) {
 	loader := pipeline.NewLoader(s.pipelinesDir)
+	pipelines, err := loader.LoadAll()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]interface{}{"pipelines": pipelines, "total": len(pipelines)})
+}
+
+// handleExamplePipelines lists the shipped template pipelines (config/pipelines/
+// examples). These are NOT loaded into the engine or the KG — they're starting
+// points the user can load into Compose.
+func (s *server) handleExamplePipelines(w http.ResponseWriter, r *http.Request) {
+	loader := pipeline.NewLoader(filepath.Join(s.pipelinesDir, "examples"))
 	pipelines, err := loader.LoadAll()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

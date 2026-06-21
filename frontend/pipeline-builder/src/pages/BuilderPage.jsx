@@ -291,12 +291,17 @@ function BuilderInner() {
   }, [pendingConnector]);
 
   useEffect(() => {
-    if (pipelineToLoad && pipelines.length) {
-      handleLoad(pipelineToLoad);
-      clearPending();
-    }
+    if (!pipelineToLoad) return;
+    const p = pipelineToLoad;
+    const flow = pipelineToFlow(p);
+    setNodes(flow.nodes);
+    setEdges(flow.edges);
+    setMeta({ id: p.id, name: p.name, description: p.description || '' });
+    setSelectedId(null);
+    setStatus({ type: 'ok', msg: `Pipeline « ${p.name || p.id} » chargé.` });
+    clearPending();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pipelineToLoad, pipelines]);
+  }, [pipelineToLoad]);
 
   return (
     <div className="flex h-full">
