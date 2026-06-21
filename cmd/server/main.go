@@ -44,6 +44,7 @@ type server struct {
 	states       *StateTracker
 	cfg          *config.Config
 	mqttClient   mqtt.Client
+	startTime    time.Time
 }
 
 func main() {
@@ -119,6 +120,7 @@ func main() {
 		states:       stateTracker,
 		cfg:          cfg,
 		mqttClient:   mqttClient,
+		startTime:    time.Now(),
 	}
 
 	mux := http.NewServeMux()
@@ -449,6 +451,8 @@ func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 		"total_downtime_seconds": 0.0,
 		"estimated_cost_eur":     0.0,
 		"hourly_cost":            s.hourlyRate,
+		"uptime_seconds":         time.Since(s.startTime).Seconds(),
+		"broker_connected":       s.mqttClient != nil && s.mqttClient.IsConnected(),
 	}
 
 	loader := pipeline.NewLoader(s.pipelinesDir)
