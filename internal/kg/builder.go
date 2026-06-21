@@ -3,6 +3,7 @@ package kg
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/MindsetAdmin/mindset-data-edge/internal/pipeline"
@@ -30,10 +31,14 @@ func NewTechnicalBuilder(pipelineReg *pipeline.Registry) *TechnicalBuilder {
 // via la propriété "functions"). Cf. docs/mindset - Demo.md.
 func (b *TechnicalBuilder) Build() *TechnicalGraph {
 	b.addPipelines()
-	b.addTopics()
-	b.addConnections()
-	b.addDashboards()
-	b.addRelations()
+	// The graph is derived only from the pipelines that actually exist — with no
+	// pipelines, it's empty. Connections/Dashboard are added only when there is
+	// at least one pipeline to relate them to.
+	if len(b.pipelineReg.List()) > 0 {
+		b.addConnections()
+		b.addDashboards()
+		b.addRelations()
+	}
 
 	return &TechnicalGraph{
 		Nodes: b.nodesToList(),
@@ -76,30 +81,6 @@ func (b *TechnicalBuilder) addDashboards() {
 	}
 }
 
-// addTopics ajoute les topics MQTT
-func (b *TechnicalBuilder) addTopics() {
-	topics := map[string]bool{
-		"mindset/raw/#":                  true,
-		"mindset/site/#":                 true,
-		"mindset/events/#":               true,
-		"mindset/events/micro-stop":      true,
-		"mindset/events/micro-stop-cost": true,
-	}
-
-	for topic := range topics {
-		nodeID := fmt.Sprintf("topic_%s", sanitizeID(topic))
-		b.nodes[nodeID] = TechnicalNode{
-			ID:   nodeID,
-			Type: TechNodeTopic,
-			Name: topic,
-			Properties: map[string]interface{}{
-				"qos_default": 1,
-			},
-			CreatedAt: time.Now(),
-		}
-	}
-}
-
 // addConnections ajoute les connexions
 func (b *TechnicalBuilder) addConnections() {
 	connections := []struct {
@@ -136,14 +117,9 @@ func (b *TechnicalBuilder) addConnections() {
 	}
 }
 
-// addRelations ajoute toutes les relations entre nœuds
+// addRelations ajoute toutes les relations entre nœuds (uniquement à partir des
+// pipelines existants — connexions reliées aux topics réellement utilisés).
 func (b *TechnicalBuilder) addRelations() {
-	// Relation: OPC-UA Connection → Topic raw
-	b.addEdge("conn_opcua", "topic_mindset_raw_", EdgePublishesTo, 1.0)
-
-	// Relation: MQTT Connection → Topic raw
-	b.addEdge("conn_mqtt", "topic_mindset_raw_", EdgeSubscribesTo, 1.0)
-
 	for _, p := range b.pipelineReg.List() {
 		pipelineID := fmt.Sprintf("pipeline_%s", p.ID)
 
@@ -154,6 +130,12 @@ func (b *TechnicalBuilder) addRelations() {
 		}
 		topicID := b.ensureTopicNode(triggerTopic)
 		b.addEdge(topicID, pipelineID, EdgeTriggers, 1.0)
+
+		// Connexions reliées au topic d'entrée réel du pipeline.
+		b.addEdge("conn_mqtt", topicID, EdgeSubscribesTo, 1.0)
+		if strings.Contains(triggerTopic, "raw") {
+			b.addEdge("conn_opcua", topicID, EdgePublishesTo, 1.0)
+		}
 
 		// Relation: Pipeline → Output Topic (topics produits)
 		for _, node := range p.Nodes {
