@@ -13,6 +13,7 @@ import { fetchStats, fetchKnowledgeGraph, fetchMachines, fetchConfig } from '../
 import { buildEvents, effectiveCost, splitDays, deltaPct, paretoCauses } from '../lib/dashboardData';
 import { useLiveSocket } from '../lib/useLiveSocket';
 import LiveDataPanel from '../components/LiveDataPanel';
+import DashboardPinsPanel from '../components/DashboardPinsPanel';
 
 const FALLBACK_MS = 20000; // safety heartbeat; real-time comes from the WebSocket
 
@@ -88,7 +89,7 @@ export default function DashboardPage() {
       <div className="max-w-6xl mx-auto space-y-5">
         {/* Header */}
         <div className="bg-dark-900 border border-dark-700 rounded-lg px-4 py-3 flex flex-wrap items-center gap-x-8 gap-y-1 text-sm">
-          <span className="font-semibold text-white">📊 MindSet Data — Dashboard</span>
+          <span className="font-semibold text-white">📊 MindSet Data Dashboard</span>
           <span className="text-dark-400">Site : <span className="text-dark-200">{config?.site?.name || config?.site?.id || '—'}</span></span>
           <span className="text-dark-400">
             Statut : <span className={brokerConnected ? 'text-green-400' : 'text-red-400'}>{brokerConnected ? '🟢 Connecté' : '🔴 Déconnecté'}</span>
@@ -114,6 +115,9 @@ export default function DashboardPage() {
           <Kpi icon="⏱️" label="Temps perdu" value={fmtDuration(downtimeToday)} unit="aujourd'hui" delta={deltaPct(downtimeToday, downtimeYest)} invert />
           <Kpi icon="📈" label="Disponibilité" value={`${availability.toFixed(1)}%`} unit="TRS (dispo.)" />
         </div>
+
+        {/* Widgets pinned via the add_to_dashboard function */}
+        <DashboardPinsPanel />
 
         {/* Live, user-selected tag data */}
         <LiveDataPanel />

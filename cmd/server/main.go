@@ -176,6 +176,7 @@ func buildRegistry(hourlyRate float64, mqttClient mqtt.Client) *functions.Regist
 	// Outputs — kg_save is intentionally NOT registered: the Knowledge Graph
 	// enriches itself automatically via the KG subscriber.
 	reg.Register(outputs.NewMQTTPublishHandler(mqttClient).GetFunction())
+	reg.Register(outputs.NewDashboardHandler(mqttClient).GetFunction())
 
 	return reg
 }

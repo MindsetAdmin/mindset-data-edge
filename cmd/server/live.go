@@ -167,6 +167,15 @@ func (h *LiveHub) Start(client mqtt.Client) error {
 		now := time.Now()
 		h.topics.record(m.Topic(), now.UnixMilli())
 
+		// Dashboard pins (from the add_to_dashboard function) → push to the UI.
+		if strings.HasPrefix(m.Topic(), "mindset/dashboard/") {
+			var w map[string]interface{}
+			if json.Unmarshal(m.Payload(), &w) == nil {
+				h.emit("dashboard", w)
+			}
+			return
+		}
+
 		// Micro-stop events → push to dashboards in real time.
 		if strings.HasPrefix(m.Topic(), "mindset/events/") {
 			var evt map[string]interface{}

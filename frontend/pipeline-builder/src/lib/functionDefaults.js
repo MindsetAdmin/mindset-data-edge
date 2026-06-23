@@ -9,6 +9,7 @@ const FUNCTION_DEFAULTS = {
   uns_mapper: { site_id: 'local-test', area: 'area1' },
   filter: { field: 'value', operator: 'gt', value: 0 },
   mqtt_publish: { topic: 'mindset/events/micro-stop', qos: 1 },
+  add_to_dashboard: { label: 'Mon widget', kind: 'value' },
 };
 
 export function defaultFunctionConfig(name) {
