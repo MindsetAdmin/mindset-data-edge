@@ -19,6 +19,7 @@
     "react-router-dom": "^7.18.0",
     "reactflow": "^11.11.4",
     "recharts": "^3.8.1",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zustand": "^5.0.14"
   },
   "devDependencies": {

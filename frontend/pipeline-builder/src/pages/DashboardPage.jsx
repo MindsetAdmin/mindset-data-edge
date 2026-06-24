@@ -1,16 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import {
-  ResponsiveContainer,
-  ComposedChart,
-  Bar,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-} from 'recharts';
 import { fetchStats, fetchKnowledgeGraph, fetchMachines, fetchConfig } from '../api/client';
-import { buildEvents, effectiveCost, splitDays, deltaPct, paretoCauses } from '../lib/dashboardData';
+import { buildEvents, effectiveCost, splitDays, deltaPct } from '../lib/dashboardData';
 import { useLiveSocket } from '../lib/useLiveSocket';
 import LiveDataPanel from '../components/LiveDataPanel';
 import DashboardPinsPanel from '../components/DashboardPinsPanel';
@@ -81,7 +71,6 @@ export default function DashboardPage() {
   const SHIFT = 8 * 3600;
   const availability = Math.max(0, Math.min(1, 1 - downtimeToday / SHIFT)) * 100;
 
-  const pareto = paretoCauses(events);
   const brokerConnected = stats?.broker_connected;
 
   return (
@@ -121,25 +110,6 @@ export default function DashboardPage() {
 
         {/* Live, user-selected tag data */}
         <LiveDataPanel />
-
-        {/* Pareto */}
-        <Panel title="📈 Pareto des causes">
-          {pareto.length === 0 ? (
-            <Empty text="Aucun événement enregistré." />
-          ) : (
-            <ResponsiveContainer width="100%" height={240}>
-              <ComposedChart data={pareto}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                <XAxis dataKey="cause" tick={{ fill: '#94a3b8', fontSize: 11 }} />
-                <YAxis yAxisId="l" tick={{ fill: '#94a3b8', fontSize: 11 }} />
-                <YAxis yAxisId="r" orientation="right" domain={[0, 100]} unit="%" tick={{ fill: '#94a3b8', fontSize: 11 }} />
-                <Tooltip contentStyle={tooltipStyle} />
-                <Bar yAxisId="l" dataKey="count" fill="#f59e0b" radius={[4, 4, 0, 0]} name="Occurrences" />
-                <Line yAxisId="r" type="monotone" dataKey="cumulative" stroke="#38bdf8" strokeWidth={2} name="Cumulé %" />
-              </ComposedChart>
-            </ResponsiveContainer>
-          )}
-        </Panel>
 
         {/* Events + Machines */}
         <div className="grid lg:grid-cols-2 gap-5">
@@ -201,7 +171,6 @@ export default function DashboardPage() {
 
 // --- helpers / subcomponents ----------------------------------------------
 
-const tooltipStyle = { background: '#0f172a', border: '1px solid #334155', borderRadius: 8, color: '#e2e8f0' };
 
 function fmtDuration(seconds) {
   if (seconds == null) return '—';

@@ -3,6 +3,7 @@ package kg
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ type TechnicalBuilder struct {
 	pipelineReg *pipeline.Registry
 	nodes       map[string]TechnicalNode
 	edges       []TechnicalEdge
+	pipeGroupID map[string]string // pipeline.ID -> grouped node id (by signature)
 }
 
 // NewTechnicalBuilder crée un nouveau builder
@@ -46,26 +48,107 @@ func (b *TechnicalBuilder) Build() *TechnicalGraph {
 	}
 }
 
-// addPipelines ajoute les pipelines comme nœuds
+// addPipelines ajoute les pipelines comme nœuds, GROUPÉS par signature de
+// fonctions : un même pipeline construit avec des tags différents apparaît comme
+// UN seul nœud listant tous les tags (propriété "tags").
 func (b *TechnicalBuilder) addPipelines() {
+	b.pipeGroupID = make(map[string]string)
+
+	type grp struct {
+		name      string
+		desc      string
+		version   string
+		functions int
+		tags      map[string]bool
+		count     int
+	}
+	groups := make(map[string]*grp)
+
 	for _, p := range b.pipelineReg.List() {
-		node := TechnicalNode{
-			ID:   fmt.Sprintf("pipeline_%s", p.ID),
+		sig := pipelineSignature(p)
+		nodeID := "pipeline_" + sanitizeID(sig)
+		b.pipeGroupID[p.ID] = nodeID
+
+		g := groups[sig]
+		if g == nil {
+			g = &grp{name: p.Name, desc: p.Description, version: p.Version, functions: len(p.Nodes), tags: map[string]bool{}}
+			groups[sig] = g
+		}
+		g.count++
+		for _, t := range pipelineTags(p) {
+			g.tags[t] = true
+		}
+	}
+
+	for sig, g := range groups {
+		nodeID := "pipeline_" + sanitizeID(sig)
+		tags := make([]string, 0, len(g.tags))
+		for t := range g.tags {
+			tags = append(tags, t)
+		}
+		sort.Strings(tags)
+		b.nodes[nodeID] = TechnicalNode{
+			ID:   nodeID,
 			Type: TechNodePipeline,
-			Name: p.Name,
+			Name: g.name,
 			Properties: map[string]interface{}{
-				"id":          p.ID,
-				"description": p.Description,
-				"version":     p.Version,
+				"description": g.desc,
+				"version":     g.version,
 				"enabled":     true,
-				// Relation externe uniquement : on expose le nombre de fonctions
-				// internes ("dépend de N fonctions") sans les détailler.
-				"functions": len(p.Nodes),
+				"functions":   g.functions,
+				"tags":        tags,
+				"versions":    g.count, // how many tag-variants share this pipeline
 			},
 			CreatedAt: time.Now(),
 		}
-		b.nodes[node.ID] = node
 	}
+}
+
+// pipelineSignature identifies "the same pipeline" regardless of tags: the
+// trigger function + the sorted set of node functions.
+func pipelineSignature(p *pipeline.Pipeline) string {
+	fns := make([]string, 0, len(p.Nodes))
+	for _, n := range p.Nodes {
+		fns = append(fns, n.Function)
+	}
+	sort.Strings(fns)
+	return p.Trigger.Function + "|" + strings.Join(fns, ",")
+}
+
+// pipelineTags collects the tags/topics a pipeline uses (trigger tags or topic,
+// plus any node config "tags").
+func pipelineTags(p *pipeline.Pipeline) []string {
+	set := map[string]bool{}
+	add := func(v interface{}) {
+		if s, ok := v.(string); ok && s != "" {
+			set[s] = true
+		}
+	}
+	collect := func(cfg map[string]interface{}) {
+		if cfg == nil {
+			return
+		}
+		if arr, ok := cfg["tags"].([]interface{}); ok {
+			for _, t := range arr {
+				add(t)
+			}
+		}
+	}
+	collect(p.Trigger.Config)
+	if len(set) == 0 {
+		if topic, ok := p.Trigger.Config["topic"].(string); ok {
+			add(topic)
+		}
+	}
+	for _, n := range p.Nodes {
+		collect(n.Config)
+	}
+	out := make([]string, 0, len(set))
+	for s := range set {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // addDashboards ajoute le(s) nœud(s) Dashboard
@@ -121,7 +204,7 @@ func (b *TechnicalBuilder) addConnections() {
 // pipelines existants — connexions reliées aux topics réellement utilisés).
 func (b *TechnicalBuilder) addRelations() {
 	for _, p := range b.pipelineReg.List() {
-		pipelineID := fmt.Sprintf("pipeline_%s", p.ID)
+		pipelineID := b.pipeGroupID[p.ID]
 
 		// Relation: Trigger → Pipeline (le pipeline consomme ce topic)
 		triggerTopic := "mindset/raw/#"

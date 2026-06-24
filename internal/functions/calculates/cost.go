@@ -53,6 +53,18 @@ func (h *CostHandler) Execute(durationSeconds float64, config map[string]interfa
 		hourlyRate = rate
 	}
 
+	// Tarif par produit (table chargée depuis CSV/Excel). Si l'événement porte un
+	// "product" présent dans la table, on utilise son coût horaire.
+	if product, ok := config["product"].(string); ok && product != "" {
+		if rates, ok := config["rates"].(map[string]interface{}); ok {
+			if row, ok := rates[product].(map[string]interface{}); ok {
+				if hr, ok := row["hourly_rate"].(float64); ok && hr > 0 {
+					hourlyRate = hr
+				}
+			}
+		}
+	}
+
 	currency := "EUR"
 	if curr, ok := config["currency"].(string); ok {
 		currency = curr

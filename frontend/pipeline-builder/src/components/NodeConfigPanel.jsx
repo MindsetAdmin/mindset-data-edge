@@ -3,6 +3,7 @@
 // preview, and an OPC-UA machine/tag selector.
 
 import { useState } from 'react';
+import * as XLSX from 'xlsx';
 import PickerModal from './PickerModal';
 import { defaultConfigFor, triggerTypeFor } from '../lib/connectorTemplates';
 import { typeStyle, getCategory } from '../lib/functionMeta';
@@ -70,7 +71,11 @@ export default function NodeConfigPanel({ node, connectors = [], fieldPickers = 
 
   const isOpcua = fn === 'opcua_read';
   const isCost = fn === 'calculate_cost';
-  const hidden = isOpcua ? new Set(['tags', 'node_id', 'machine']) : new Set();
+  const hidden = isOpcua
+    ? new Set(['tags', 'node_id', 'machine'])
+    : isCost
+    ? new Set(['hourly_rate', 'currency', 'rate_source', 'rate_tag', 'rates'])
+    : new Set();
 
   return (
     <aside className="w-72 bg-dark-900 border-l border-dark-700 p-4 overflow-y-auto shrink-0">
@@ -112,6 +117,11 @@ export default function NodeConfigPanel({ node, connectors = [], fieldPickers = 
 
       {/* OPC-UA machine + tag selection */}
       {isOpcua && <OpcuaTagSelector machines={machines} config={config} setConfigRaw={setConfigRaw} />}
+
+      {/* Cost configuration */}
+      {isCost && (
+        <CostConfig config={config} configDefaults={configDefaults} setConfig={setConfig} setConfigRaw={setConfigRaw} tagOptions={fieldPickers.node_id || []} />
+      )}
 
       {/* Config fields (labelled, with help + example) */}
       <div className="mt-4 mb-2 flex items-center justify-between">
@@ -244,6 +254,110 @@ function OpcuaTagSelector({ machines, config, setConfigRaw }) {
         ))}
       </div>
       <div className="text-[11px] text-dark-500 mt-1">{(config.tags || []).length} tag(s) sélectionné(s)</div>
+    </div>
+  );
+}
+
+// Cost configuration: rate source (manual / from config / from tag) + currency.
+function CostConfig({ config, configDefaults, setConfig, setConfigRaw, tagOptions }) {
+  const cfgRate = configDefaults?.cost?.hourly_rate ?? 85;
+  const source = config.rate_source || 'manual';
+  const setSource = (s) => {
+    setConfigRaw('rate_source', s);
+    if (s === 'config') setConfigRaw('hourly_rate', cfgRate);
+  };
+  const labels = { manual: 'Manuel', config: 'Config', tag: 'Tag' };
+
+  return (
+    <div className="mb-3 border border-dark-700 rounded-md p-2.5 space-y-2">
+      <label className="block text-[11px] text-dark-400 uppercase tracking-wider">Source du coût horaire</label>
+      <div className="flex gap-3 text-xs">
+        {['manual', 'config', 'tag'].map((s) => (
+          <label key={s} className="flex items-center gap-1 cursor-pointer">
+            <input type="radio" name="rate_source" checked={source === s} onChange={() => setSource(s)} />
+            {labels[s]}
+          </label>
+        ))}
+      </div>
+
+      {source === 'manual' && (
+        <div className="flex items-center gap-1">
+          <input type="number" value={config.hourly_rate ?? ''} placeholder="85" onChange={(e) => setConfig('hourly_rate', e.target.value)} className="input text-xs" />
+          <span className="text-xs text-dark-400">€/h</span>
+        </div>
+      )}
+      {source === 'config' && (
+        <p className="text-xs text-dark-300">
+          Depuis <span className="font-mono">agent.yaml</span> : <span className="text-green-400">{cfgRate} €/h</span>
+          <button onClick={() => setSource('manual')} className="ml-2 text-blue-400 hover:text-blue-300">override</button>
+        </p>
+      )}
+      {source === 'tag' && (
+        <select value={config.rate_tag || ''} onChange={(e) => setConfigRaw('rate_tag', e.target.value)} className="input text-xs">
+          <option value="">(choisir un tag contenant le taux)</option>
+          {tagOptions.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+      )}
+
+      <label className="block text-[11px] text-dark-400 uppercase tracking-wider">Devise</label>
+      <select value={config.currency || 'EUR'} onChange={(e) => setConfigRaw('currency', e.target.value)} className="input text-xs">
+        <option>EUR</option>
+        <option>USD</option>
+        <option>GBP</option>
+      </select>
+
+      {/* Per-product rates from a CSV/Excel file */}
+      <RateTableUpload config={config} setConfigRaw={setConfigRaw} />
+    </div>
+  );
+}
+
+// Upload a CSV/Excel file with per-product rates → config.rates {product:{hourly_rate,cost_per_unit}}.
+function RateTableUpload({ config, setConfigRaw }) {
+  const [err, setErr] = useState(null);
+  const rates = config.rates || {};
+  const count = Object.keys(rates).length;
+
+  const num = (v) => {
+    const n = Number(String(v ?? '').replace(',', '.'));
+    return Number.isFinite(n) ? n : undefined;
+  };
+
+  const onFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf);
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+      const table = {};
+      rows.forEach((r) => {
+        const product = r.Product ?? r.product ?? r.PRODUCT;
+        if (!product) return;
+        const hr = num(r['Cost per Hour (€/h)'] ?? r['Cost per Hour'] ?? r.hourly_rate ?? r.cost_per_hour);
+        const cu = num(r['Cost per Unit (€)'] ?? r['Cost per Unit'] ?? r.cost_per_unit);
+        table[product] = { hourly_rate: hr, cost_per_unit: cu };
+      });
+      if (Object.keys(table).length === 0) {
+        setErr('Aucune ligne valide (colonnes attendues : Product, Cost per Hour (€/h)).');
+        return;
+      }
+      setConfigRaw('rates', table);
+      setErr(null);
+    } catch (e2) {
+      setErr('Fichier illisible : ' + e2.message);
+    }
+  };
+
+  return (
+    <div className="pt-2 border-t border-dark-700">
+      <label className="block text-[11px] text-dark-400 uppercase tracking-wider mb-1">Tarifs par produit (CSV / Excel)</label>
+      <input type="file" accept=".csv,.xlsx,.xls" onChange={onFile} className="text-[11px] text-dark-300 file:mr-2 file:text-xs file:bg-dark-700 file:text-white file:border-0 file:rounded file:px-2 file:py-1" />
+      {count > 0 && <p className="text-[11px] text-green-400 mt-1">✅ {count} produit(s) chargé(s) : {Object.keys(rates).slice(0, 4).join(', ')}{count > 4 ? '…' : ''}</p>}
+      {err && <p className="text-[11px] text-red-400 mt-1">❌ {err}</p>}
+      <p className="text-[10px] text-dark-500 mt-1">Le coût horaire par produit est choisi selon le champ <span className="font-mono">product</span> de l'événement (sinon, le taux ci-dessus).</p>
     </div>
   );
 }

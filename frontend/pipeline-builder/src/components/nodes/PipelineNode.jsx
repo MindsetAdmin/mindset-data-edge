@@ -5,6 +5,7 @@ import { typeStyle } from '../../lib/functionMeta';
 export default function PipelineNode({ data, selected }) {
   const s = typeStyle(data.type);
   const configKeys = Object.keys(data.config || {});
+  const isOutput = data.type === 'output'; // outputs are sinks: input only, no output port
 
   return (
     <div
@@ -41,7 +42,7 @@ export default function PipelineNode({ data, selected }) {
         </div>
       )}
 
-      <Handle type="source" position={Position.Right} className="!w-2 !h-2 !bg-dark-300" />
+      {!isOutput && <Handle type="source" position={Position.Right} className="!w-2 !h-2 !bg-dark-300" />}
     </div>
   );
 }
