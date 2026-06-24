@@ -1,210 +1,101 @@
-Objective
-Bridge the gap between the Edge Agent (backend, Go) and the Frontend (React/Next.js) so that the user sees their real machines, tags, and topics — not static mock data.
+Enhance the Pipeline Builder to provide a clear, guided, and error-proof user experience with:
+- Machine & Tag Selection for OPC-UA Read
+- Cost Configuration with live preview
+- Duplicate Pipeline Prevention
+- Knowledge Graph Grouping by tag set
+- Clear Configuration Panels for each function
+- Smart Error Messages with actionable guidance
 
-📊 Current State vs Target State
-Current (Mock data)
-text
-Frontend shows:
-- Static list of machines (machine1, machine2)
-- Predefined topics (mindset/raw/ns=3;i=1011)
-- Hardcoded pipeline templates
-- No real-time data sync
-Target (Real data)
-text
-Frontend shows:
-- ✅ Actual machines discovered by OPC-UA
-- ✅ Live topics from MQTT broker
-- ✅ Real-time tag values
-- ✅ Actual pipelines from config/pipelines/
-- ✅ Live events from mindset/events/#
+1. OPC-UA Read — Machine & Tag Selection
+When the user adds an opcua_read function or selects it in the trigger:
+The configuration panel must display:
+
+Element	Requirement
+Machine dropdown	List of all discovered machines from OPC-UA discovery
+Tag selection	Checkbox list of all tags for the selected machine
+Select All / Deselect All	Buttons to quickly select/deselect all tags
+Filter by type	Filter tags by data type (Boolean, Float, Int32, etc.)
+Filter by name	Search/filter tags by name
+Live preview	Show live values next to each tag (if agent is running)
+All tags option	Option to select "All tags" from a machine
+
+2. Cost Configuration — calculate_cost
+When the user adds a calculate_cost function:
+
+The configuration panel must display:
+
+Element	Requirement
+Hourly Rate Source	Radio buttons: Manual / From config / From tag
+Manual entry	Number input field with unit (€/h)
+From config	Pre-filled from agent.yaml (read-only with option to override)
+From tag	Dropdown to select a tag that contains the hourly rate (e.g., from ERP)
+Currency	Dropdown: EUR, USD, GBP
+Live preview	Show cost for typical durations: 30s, 1min, 3min, 5min
+
+3. Duplicate Pipeline Prevention
+Rule: A pipeline cannot be saved if it has the same combination of tags and functions as an existing pipeline.
 
 
-The Frontend should feel like you are manipulating the backend directly — every selection in the UI maps to real data flowing through the Edge Agent. 
+4. Knowledge Graph — Pipeline Grouping
+Rule: When you build a pipeline with tags, and then add the same pipeline with different tags, the Knowledge Graph should show one pipeline node with all tags listed.
 
 
+5. Clear Configuration Panel for Each Function
+Every function's configuration panel must include:
+
+Element	Requirement
+Header	Function name + icon + category badge (Connector/Transform/Calculate/Condition/Output)
+Description	Brief explanation of what the function does
+Input fields	All required/optional parameters with labels
+Help text	Tooltips or helper text below each field (ⓘ icon)
+Validation	Real-time validation (required fields, format checks)
+Preview	Live preview of the output (if applicable)
+Examples	Example values shown as placeholders
+Apply/Cancel	Buttons to apply or cancel changes
+
+6. Smart Error Messages
+Current Error: ❌ ID et nom sont requis.
+
+Required Improvement: Error messages must include what is missing and how to fix it.
+
+Error	New Message
+Missing ID	❌ Veuillez donner un nom à votre pipeline. Le nom sera utilisé comme identifiant unique.
+Missing Name	❌ Veuillez donner un titre à votre pipeline (ex: "Micro-stop Detection").
+No trigger	❌ Aucun connecteur (trigger) trouvé. Veuillez ajouter un connecteur dans la zone ENTRÉE.
+No output	❌ Aucune sortie trouvée. Veuillez ajouter "mqtt_publish" ou "add_to_dashboard" dans la zone SORTIE.
+Missing machine_id	❌ Veuillez sélectionner une machine pour "state_machine".
+Missing topic	❌ Veuillez sélectionner un topic pour "mqtt_subscribe".
+Duplicate pipeline	⚠️ Une pipeline avec cette configuration existe déjà : "Micro-stop Detection". Options : [Modifier] [Nouvelle version] [Annuler]
+Incompatible types	⚠️ La fonction "calculate_cost" attend une durée (en secondes), mais reçoit un booléen. Vérifiez la chaîne avant "calculate_cost".
+Missing opcua tags	❌ Veuillez sélectionner au moins un tag pour "opcua_read".
+7. Pipeline Naming & Save Flow
+Save Flow Requirements:
+
+Step	Action
+1	User clicks "💾 Save Pipeline"
+2	System validates: Name, ID, Trigger, Output, Tags, Connections
+3	If validation fails → Show error message with fix instructions
+4	If validation passes → Check for duplicates
+5	If duplicate found → Show modal with options
+6	If no duplicate → Save pipeline to YAML + Register in engine + Update KG
+7	Show success notification with link to view in KG
 
 
-1. 🔌 OPC-UA Read
-What the user sees in Frontend:
+8. Acceptance Criteria
+User can select a machine and choose specific tags for OPC-UA Read
 
-List of all discovered machines with their live tags
+Live tag values are displayed in the configuration panel
 
-Each tag shows: Node ID, Name, Data Type, Current Value
+Cost calculation shows a preview for 30s, 1min, 3min, 5min
 
-Configuration panel with endpoint, node selection, timeout, security mode
+Duplicate pipelines are blocked with a clear modal and options
 
-Frontend UI Element	What It Displays	Where It Comes From (Edge)
-List of machines	Machine1, Machine2, Simulation...	discovery/opcua.go → BrowseNodeTree() → Extracts WorkCenter names from OPC-UA tags
-Tags per machine	temperature (Float), status (Boolean), pressure (Float)...	discovery/opcua.go → BrowseNodeTree() → All child tags under each WorkCenter
-Node ID	ns=3;i=1011, ns=3;i=1014...	discovery/opcua.go → BrowseNodeTree() → ref.NodeID.NodeID.String()
-Data Type	Float, Boolean, Int32, Double...	discovery/opcua.go → readNodeValue() → AttributeIDDataType
-Current Value (Live)	23.5, true, 42...	discovery/opcua.go → Subscribe() → Real-time value changes
-Timestamp	2026-06-20T14:32:05Z	discovery/opcua.go → readNodeValue() → result.Value.SourceTimestamp
-Configuration Panel:
+Pipeline node in KG shows all associated tags as properties
 
-Parameter	Description	Edge Source
-Endpoint	OPC-UA Server URL	config/agent.yaml → opcua.endpoint
-Node ID	Tag to read	discovery/opcua.go → Selected from BrowseNodeTree()
-Timeout	Milliseconds	config/agent.yaml → opcua.timeout (or default 5000ms)
-Security Mode	None / Sign / SignAndEncrypt	config/agent.yaml → opcua.security_mode
-2. 📡 MQTT Subscribe (Connector)
-What the user sees in Frontend:
+Each function has a clear, structured configuration panel
 
-List of all available MQTT topics (raw, site, events)
+Error messages include a description of the problem and a fix
 
-Broker connection status
+Save flow validates name, ID, trigger, output before saving
 
-Message rate per topic (msg/s)
-
-Frontend UI Element	What It Displays	Where It Comes From (Edge)
-Broker list	tcp://localhost:1883 (pre-configured)	config/agent.yaml → mqtt.broker
-Raw topics	mindset/raw/ns=3;i=1009, mindset/raw/ns=3;i=1011...	mqtt/publisher.go → PublishRaw() → Dynamically created from OPC-UA tags
-Site topics	mindset/site/local-test/area1/machine1/temperature...	uns/contextualizer.go → Start() → Published after UNS mapping
-Event topics	mindset/events/micro-stop, mindset/events/status-change...	rules/engine.go → publishStatusEvent() → Published after detection
-Message rate	6 msg/s, 4 msg/s, 0.5 msg/s...	mqtt/publisher.go → Calculated from publish frequency
-Broker status	Connected / Disconnected	mqtt/publisher.go → client.IsConnected()
-Configuration Panel:
-
-Parameter	Description	Edge Source
-Broker URL	MQTT broker address	config/agent.yaml → mqtt.broker
-Topic	Topic to subscribe to	List from mqtt/publisher.go (raw/site/events)
-QoS	0, 1, 2	Documentation / Default: 1
-Client ID	MQTT client identifier	Auto-generated from mqtt/publisher.go → clientID
-3. ⚙️ Filter (Transform)
-What the user sees in Frontend:
-
-Field selector (which field to filter)
-
-Operator selector (eq, ne, gt, lt, contains)
-
-Value input (what to compare against)
-
-Frontend UI Element	What It Displays	Where It Comes From (Edge)
-Available fields	value, name, data_type, node_id...	functions/transforms/filter.go → From incoming JSON structure
-Operators	eq (equal), ne (not equal), gt (greater than), lt (less than), contains	functions/transforms/filter.go → Supported operators in code
-Dynamic value type	Number input (for gt/lt), Text input (for contains), Boolean (for eq/ne)	functions/transforms/filter.go → Determined by operator and field type
-Configuration Panel:
-
-Parameter	Description	Edge Source
-Field	Which field to filter on	functions/transforms/filter.go → From JSON structure
-Operator	Comparison operator	functions/transforms/filter.go → Supported operators
-Value	Value to compare against	User input, validated by functions/transforms/filter.go
-4. 🔄 State Machine (Transform)
-What the user sees in Frontend:
-
-List of machines with their current status (Running/Stopped)
-
-Transition history (Run → Stop → Run)
-
-Duration since last transition
-
-Frontend UI Element	What It Displays	Where It Comes From (Edge)
-Machine list	Machine1 (Running), Machine2 (Stopped), Machine3 (Running)...	discovery/opcua.go → BrowseNodeTree() → Extracts WorkCenter names with "status" tags
-Current status	Running ✅ / Stopped ❌	rules/engine.go → stateStore.Get() → Current state from StateStore
-Status timestamp	Last change at 14:32:05	rules/engine.go → stateStore.Get() → Timestamp from StateStore
-Transition history	Run → Stop (14:32:05), Stop → Run (14:33:05)...	rules/engine.go → stateStore.GetHistory() → History from StateStore
-Duration	45 seconds	rules/engine.go → Calculated from transition timestamps
-Configuration Panel:
-
-Parameter	Description	Edge Source
-Machine ID	Which machine to monitor	discovery/opcua.go → From BrowseNodeTree() (list of WorkCenters)
-Initial State	Starting state (default: false)	functions/transforms/state_machine.go → Default parameter
-5. 🗺️ UNS Mapper (Transform)
-What the user sees in Frontend:
-
-Site ID configuration
-
-Area configuration
-
-Tag normalization preview (machine1.temp → temperature)
-
-Generated ISA-95 topic preview
-
-Frontend UI Element	What It Displays	Where It Comes From (Edge)
-Site ID	local-test (pre-filled)	config/agent.yaml → site.id
-Area	area1 (pre-filled)	config/agent.yaml → Default "area1"
-Normalized tag name	temperature (from temp), pressure (from presion), status (from stat)	uns/mapper.go → normalizeTagName() → Table of abbreviations
-Inferred unit	celsius, bar, rpm, ""	uns/mapper.go → inferUnit() → From normalized name
-Generated topic	mindset/site/local-test/area1/machine1/temperature	uns/mapper.go → UNSNode.FullTopic()
-Tag description	Temperature sensor on machine1	uns/mapper.go → buildDescription()
-Configuration Panel:
-
-Parameter	Description	Edge Source
-Site ID	Factory site identifier	config/agent.yaml → site.id
-Area	Production area	config/agent.yaml → site.area (or default "area1")
-Custom Tag Mapping	Add custom tag normalizations (optional)	User input → stored in uns/mapper.go at runtime
-6. ⏱️ Duration (Calculate)
-What the user sees in Frontend:
-
-Duration calculator (start/stop automatic)
-
-Result in seconds and minutes
-
-Frontend UI Element	What It Displays	Where It Comes From (Edge)
-Start time	2026-06-20T14:32:05Z	functions/calculates/duration.go → Recorded on first event
-End time	2026-06-20T14:32:50Z	functions/calculates/duration.go → Recorded on second event
-Duration (seconds)	45.0s	functions/calculates/duration.go → Calculated from start/end
-Duration (minutes)	0.75min	functions/calculates/duration.go → Calculated from seconds
-Configuration Panel:
-
-Parameter	Description	Edge Source
-None	No configuration parameters	Function is automatic
-7. 💰 Cost (Calculate)
-What the user sees in Frontend:
-
-Cost per minute (auto-calculated from hourly rate)
-
-Total cost in euros
-
-Currency selector
-
-Frontend UI Element	What It Displays	Where It Comes From (Edge)
-Hourly rate	85.00 €/h (pre-filled)	config/agent.yaml → cost.hourly_cost
-Cost per minute	1.42 €/min	functions/calculates/cost.go → hourly_rate / 60
-Total cost	63.75 €	functions/calculates/cost.go → cost_per_minute × duration_minutes
-Currency	EUR (pre-filled)	config/agent.yaml → cost.currency
-Configuration Panel:
-
-Parameter	Description	Edge Source
-Hourly Rate	Cost per hour in €	config/agent.yaml → cost.hourly_cost
-Currency	EUR, USD, GBP	config/agent.yaml → cost.currency
-8. 🚦 Threshold (Condition)
-What the user sees in Frontend:
-
-Min value (default: 30 seconds)
-
-Max value (default: 180 seconds)
-
-Result (true/false) → Is it a micro-stop?
-
-Frontend UI Element	What It Displays	Where It Comes From (Edge)
-Min value	30 (pre-filled)	functions/conditions/threshold.go → Default min
-Max value	180 (pre-filled)	functions/conditions/threshold.go → Default max
-Current value	45.0s	functions/calculates/duration.go → Output from duration function
-Result	✅ True (Is micro-stop)	functions/conditions/threshold.go → min < value < max
-Configuration Panel:
-
-Parameter	Description	Edge Source
-Min	Minimum duration in seconds	functions/conditions/threshold.go → Default 30
-Max	Maximum duration in seconds	functions/conditions/threshold.go → Default 180
-9. 📤 MQTT Publish (Output)
-What the user sees in Frontend:
-
-Topic selector (ISA-95 or events)
-
-QoS selection
-
-Retained checkbox
-
-Frontend UI Element	What It Displays	Where It Comes From (Edge)
-Available topics	mindset/site/#, mindset/events/#, mindset/events/micro-stop...	mqtt/publisher.go → Known topics (from UNS mapper + rules engine)
-ISA-95 topics	mindset/site/local-test/area1/machine1/temperature...	uns/mapper.go → Generated from UNS mapping
-Event topics	mindset/events/micro-stop, mindset/events/status-change...	rules/engine.go → Published events
-QoS	0, 1, 2	Documentation → Default 1
-Retained	True / False	Documentation → Default false
-Configuration Panel:
-
-Parameter	Description	Edge Source
-Topic	MQTT topic to publish to	List from mqtt/publisher.go (site/events)
-QoS	Quality of Service	Documentation (default 1)
-Retained	Keep last message	Documentation (default false)
+Success notification includes link to view in Knowledge Graph

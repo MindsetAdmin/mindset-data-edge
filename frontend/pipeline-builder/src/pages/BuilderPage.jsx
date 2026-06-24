@@ -57,6 +57,8 @@ function BuilderInner() {
   const [showFnPicker, setShowFnPicker] = useState(false);
   const [fieldPickers, setFieldPickers] = useState({ machine_id: [], topic: [], broker: [], node_id: [] });
   const [configDefaults, setConfigDefaults] = useState(null);
+  const [machines, setMachines] = useState([]);
+  const [dupModal, setDupModal] = useState(null); // { existing } when a duplicate is found
 
   const { screenToFlowPosition } = useReactFlow();
 
@@ -78,6 +80,7 @@ function BuilderInner() {
     // Machines (with live status) + their tags grouped by machine.
     try {
       const m = await fetchMachines();
+      setMachines((m.machines || []).filter((x) => x.work_center !== '(autres)'));
       machine_id = (m.machines || [])
         .filter((x) => x.work_center !== '(autres)')
         .map((x) => ({
@@ -213,19 +216,63 @@ function BuilderInner() {
     setMeta((m) => ({ ...m, name: value, id: m.id || slugify(value) }));
   }
 
-  async function handleSave() {
-    if (!meta.id || !meta.name) {
-      setStatus({ type: 'error', msg: 'ID et nom sont requis.' });
-      return;
+  // Smart, actionable validation. Returns an error string or null.
+  function validate() {
+    if (!meta.name) return '❌ Veuillez donner un titre à votre pipeline (ex: "Micro-stop Detection").';
+    if (!meta.id) return '❌ Veuillez donner un nom à votre pipeline. Le nom sera utilisé comme identifiant unique.';
+
+    const trigger = nodes.find((n) => n.type === 'triggerNode');
+    if (!trigger || !trigger.data.function) return '❌ Aucun connecteur (trigger) trouvé. Veuillez ajouter un connecteur dans la zone ENTRÉE.';
+    if (trigger.data.function === 'mqtt_subscribe' && !trigger.data.config?.topic)
+      return '❌ Veuillez sélectionner un topic pour "mqtt_subscribe".';
+    if (trigger.data.function === 'opcua_read' && !(trigger.data.config?.tags?.length || trigger.data.config?.node_id))
+      return '❌ Veuillez sélectionner au moins un tag pour "opcua_read".';
+
+    const steps = nodes.filter((n) => n.type === 'pipelineNode');
+    if (!steps.some((n) => n.data.type === 'output'))
+      return '❌ Aucune sortie trouvée. Veuillez ajouter "mqtt_publish" ou "add_to_dashboard" dans la zone SORTIE.';
+
+    for (const n of steps) {
+      if (n.data.function === 'state_machine' && !n.data.config?.machine_id)
+        return '❌ Veuillez sélectionner une machine pour "state_machine".';
+      if (n.data.function === 'opcua_read' && !(n.data.config?.tags?.length || n.data.config?.node_id))
+        return '❌ Veuillez sélectionner au moins un tag pour "opcua_read".';
     }
+    return null;
+  }
+
+  // A signature for duplicate detection: trigger topic/tags + the set of functions.
+  function signature(p) {
+    const fns = (p.nodes || []).map((n) => n.function).sort().join(',');
+    const trig = `${p.trigger?.function || ''}:${p.trigger?.config?.topic || ''}:${(p.trigger?.config?.tags || []).slice().sort().join('|')}`;
+    return `${trig}#${fns}`;
+  }
+
+  async function doSave() {
     try {
       const pipeline = flowToPipeline({ ...meta, version: '1.0', nodes, edges });
       await createPipeline(pipeline);
-      setStatus({ type: 'ok', msg: `Pipeline « ${meta.id} » sauvegardé.` });
+      setStatus({ type: 'ok', msg: `✅ Pipeline « ${meta.name} » sauvegardé — visible dans le Knowledge Graph.` });
       refreshPipelines();
     } catch (err) {
       setStatus({ type: 'error', msg: err.message });
     }
+  }
+
+  async function handleSave() {
+    const err = validate();
+    if (err) {
+      setStatus({ type: 'error', msg: err });
+      return;
+    }
+    // Duplicate check (same trigger + functions as an existing pipeline, different id).
+    const sig = signature(flowToPipeline({ ...meta, version: '1.0', nodes, edges }));
+    const existing = pipelines.find((p) => p.id !== meta.id && signature(p) === sig);
+    if (existing) {
+      setDupModal({ existing });
+      return;
+    }
+    doSave();
   }
 
   function handleLoad(id) {
@@ -397,6 +444,7 @@ function BuilderInner() {
         connectors={connectors}
         fieldPickers={fieldPickers}
         configDefaults={configDefaults}
+        machines={machines}
         onChange={updateNodeData}
         onDelete={handleDeleteNode}
         onClose={() => setSelectedId(null)}
@@ -409,6 +457,32 @@ function BuilderInner() {
           onSelect={addFunctionNode}
           onClose={() => setShowFnPicker(false)}
         />
+      )}
+
+      {dupModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setDupModal(null)}>
+          <div className="bg-dark-900 border border-dark-700 rounded-xl w-full max-w-md p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-white font-semibold mb-2">⚠️ Pipeline en double</h3>
+            <p className="text-sm text-dark-300 mb-4">
+              Une pipeline avec cette configuration existe déjà : « {dupModal.existing.name} ».
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => { setMeta((m) => ({ ...m, id: dupModal.existing.id, name: dupModal.existing.name })); setDupModal(null); doSave(); }}
+                className="bg-dark-700 hover:bg-dark-600 text-white text-sm px-3 py-1.5 rounded-md"
+              >
+                Modifier l'existante
+              </button>
+              <button
+                onClick={() => { const s = `${meta.id}_v2`; setMeta((m) => ({ ...m, id: s, name: `${m.name} v2` })); setDupModal(null); setStatus({ type: 'pending', msg: 'Renommée — cliquez Sauvegarder.' }); }}
+                className="bg-blue-600 hover:bg-blue-500 text-white text-sm px-3 py-1.5 rounded-md"
+              >
+                Nouvelle version
+              </button>
+              <button onClick={() => setDupModal(null)} className="text-dark-400 hover:text-white text-sm px-3 py-1.5">Annuler</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
