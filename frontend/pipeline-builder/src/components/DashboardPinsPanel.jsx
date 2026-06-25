@@ -1,11 +1,23 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useLiveSocket } from '../lib/useLiveSocket';
+import { fetchDashboardPins } from '../api/client';
 
 // Shows widgets pinned via the add_to_dashboard pipeline function. Each message
 // arrives over the WebSocket as {type:'dashboard', data:{label,kind,data,...}};
-// we keep the latest per label.
+// we keep the latest per label. Seeds from the server snapshot so pins show even
+// if they were published before this panel opened.
 export default function DashboardPinsPanel() {
   const [pins, setPins] = useState({}); // label -> {label, kind, data, timestamp_ms}
+
+  useEffect(() => {
+    fetchDashboardPins()
+      .then((d) => {
+        const seed = {};
+        (d.pins || []).forEach((p) => p?.label && (seed[p.label] = p));
+        setPins((prev) => ({ ...seed, ...prev }));
+      })
+      .catch(() => {});
+  }, []);
 
   const connected = useLiveSocket((msg) => {
     if (msg.type !== 'dashboard' || !msg.data?.label) return;

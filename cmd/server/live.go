@@ -149,10 +149,24 @@ type LiveHub struct {
 	states *StateTracker
 	// broadcast pushes a typed message to WebSocket clients (nil = no-op).
 	broadcast func(msgType string, data interface{})
+
+	pinsMu sync.RWMutex
+	pins   map[string]map[string]interface{} // label -> {label,kind,data,timestamp_ms}
 }
 
 func NewLiveHub(tags *TagRegistry, topics *TopicRegistry, states *StateTracker) *LiveHub {
-	return &LiveHub{tags: tags, topics: topics, states: states}
+	return &LiveHub{tags: tags, topics: topics, states: states, pins: make(map[string]map[string]interface{})}
+}
+
+// Pins returns a snapshot of the current dashboard pins (latest per label).
+func (h *LiveHub) Pins() []map[string]interface{} {
+	h.pinsMu.RLock()
+	defer h.pinsMu.RUnlock()
+	out := make([]map[string]interface{}, 0, len(h.pins))
+	for _, p := range h.pins {
+		out = append(out, p)
+	}
+	return out
 }
 
 func (h *LiveHub) emit(t string, data interface{}) {
@@ -167,10 +181,15 @@ func (h *LiveHub) Start(client mqtt.Client) error {
 		now := time.Now()
 		h.topics.record(m.Topic(), now.UnixMilli())
 
-		// Dashboard pins (from the add_to_dashboard function) → push to the UI.
+		// Dashboard pins (from the add_to_dashboard function) → store + push to UI.
 		if strings.HasPrefix(m.Topic(), "mindset/dashboard/") {
 			var w map[string]interface{}
 			if json.Unmarshal(m.Payload(), &w) == nil {
+				if label, ok := w["label"].(string); ok && label != "" {
+					h.pinsMu.Lock()
+					h.pins[label] = w
+					h.pinsMu.Unlock()
+				}
 				h.emit("dashboard", w)
 			}
 			return

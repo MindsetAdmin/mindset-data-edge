@@ -84,6 +84,12 @@ export async function fetchConfig() {
     return response.json();
 }
 
+export async function fetchDashboardPins() {
+    const response = await fetch(`${API_BASE}/dashboard/pins`);
+    if (!response.ok) throw new Error(`Failed to fetch dashboard pins: ${response.statusText}`);
+    return response.json();
+}
+
 export async function fetchStats() {
     const response = await fetch(`${API_BASE}/stats`);
     if (!response.ok) {

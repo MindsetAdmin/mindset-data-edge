@@ -42,6 +42,7 @@ type server struct {
 	tags         *TagRegistry
 	topics       *TopicRegistry
 	states       *StateTracker
+	live         *LiveHub
 	cfg          *config.Config
 	mqttClient   mqtt.Client
 	startTime    time.Time
@@ -102,13 +103,13 @@ func main() {
 	topicReg := NewTopicRegistry()
 	stateTracker := NewStateTracker()
 	wsHubInstance := newWSHub()
+	hub := NewLiveHub(tagReg, topicReg, stateTracker)
+	hub.broadcast = wsHubInstance.broadcast // push live updates to WebSocket clients
 	if mqttClient != nil {
-		hub := NewLiveHub(tagReg, topicReg, stateTracker)
-		hub.broadcast = wsHubInstance.broadcast // push live updates to WebSocket clients
 		if err := hub.Start(mqttClient); err != nil {
 			log.Printf("[API] Live data hub failed: %v", err)
 		} else {
-			log.Printf("[API] Live data active (tags, topics, machine state from mindset/#)")
+			log.Printf("[API] Live data active (tags, topics, machine state, dashboard pins from mindset/#)")
 		}
 	}
 
@@ -120,6 +121,7 @@ func main() {
 		tags:         tagReg,
 		topics:       topicReg,
 		states:       stateTracker,
+		live:         hub,
 		cfg:          cfg,
 		mqttClient:   mqttClient,
 		startTime:    time.Now(),
@@ -135,6 +137,7 @@ func main() {
 	mux.HandleFunc("/api/machines", srv.handleMachines)
 	mux.HandleFunc("/api/topics", srv.handleTopics)
 	mux.HandleFunc("/api/config", srv.handleConfig)
+	mux.HandleFunc("/api/dashboard/pins", srv.handleDashboardPins)
 	mux.HandleFunc("/api/kg/technical", srv.handleTechnicalGraph)
 	mux.HandleFunc("/api/kg/domain", srv.handleDomainGraph)
 	mux.HandleFunc("/api/stats", srv.handleStats)
@@ -354,6 +357,11 @@ func (s *server) handleRunPipeline(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("[API] Ran pipeline %q -> %s", target.ID, result.Status)
 	writeJSON(w, result)
+}
+
+func (s *server) handleDashboardPins(w http.ResponseWriter, r *http.Request) {
+	pins := s.live.Pins()
+	writeJSON(w, map[string]interface{}{"pins": pins, "total": len(pins)})
 }
 
 func (s *server) handleTags(w http.ResponseWriter, r *http.Request) {
