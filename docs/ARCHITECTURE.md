@@ -224,11 +224,13 @@ Stack: **React 19**, **Vite**, **React Router**, **Zustand** (cross‑page state
 | `KnowledgeGraphPage` | `/kg` | Cytoscape viewer, Technique/Domaine toggle + type filters |
 
 ### 6.2 Components (`src/components/`)
-`NavBar`, `Palette`, `NodeConfigPanel` (guided config: header/badge/description,
-labelled fields + help/examples, pickers, OPC‑UA machine+tag selector, cost
-source + CSV/Excel rate upload + live preview, delete), `PickerModal`,
-`CytoscapeGraph`, `ErrorBoundary`, **`LiveDataPanel`** (pick tags → live chart),
-**`DashboardPinsPanel`** (`add_to_dashboard` widgets), and ReactFlow nodes
+`NavBar` (shows the **MindSet Data logo**, `public/logo.png`), `Palette`,
+`NodeConfigPanel` (guided config: header/badge/description, labelled fields +
+help/examples, pickers, OPC‑UA machine+tag selector, cost source + CSV/Excel rate
+upload + live preview, delete), `PickerModal`, `CytoscapeGraph`, `ErrorBoundary`,
+**`LiveDataPanel`** (pick tags → live chart), **`DashboardWidgets`** (interactive
+`add_to_dashboard` widgets: line/bar/gauge/value/status charts, time ranges, live
+stats, `✕`/`⚙️`, persisted in localStorage), and ReactFlow nodes
 `nodes/{PipelineNode,TriggerNode,ZoneNode}` (outputs are input‑only sinks).
 
 ### 6.3 Libraries (`src/lib/`)
@@ -286,7 +288,7 @@ production build you serve the static frontend and point it at the API host
 | File | Responsibility |
 |---|---|
 | `main.go` | Creates the `http.ServeMux`, registers every `/api/*` route, wraps it in `withCORS`, and serves on `:8080` (`http.ListenAndServe`). Contains the REST handlers. |
-| `ws.go` | `wsHub` — upgrades `/api/ws` to a WebSocket and broadcasts `{type,data}` messages to all connected clients. |
+| `ws.go` | `wsHub` — upgrades `/api/ws` to a WebSocket and broadcasts `{type,data}` to all connected clients (per‑client write deadline so a slow/dead client can't stall the feed). |
 | `live.go` | `LiveHub` — subscribes to MQTT `mindset/#` and calls `wsHub.broadcast(...)` so tag/state/event changes are pushed to the browser in real time. |
 | `tags.go` | Tag registry behind `GET /api/tags`. |
 
@@ -398,6 +400,9 @@ still runs; live values/rates/state are limited and persisted tags are shown.
 14. **Cost config** — rate source (Manual/Config/Tag), currency, **CSV/Excel**
     per‑product rates, live preview.
 15. **Output sinks** (input‑only ports), **KG tag grouping**, **Pareto removed**.
+16. **Interactive dashboard widgets** (`DashboardWidgets`) — add from data sources,
+    chart type (line/bar/gauge/value/status), time range, live stats, localStorage.
+17. **MindSet Data logo** in the NavBar; **WebSocket write‑deadline** hardening.
 
 ## 11. Notes & limitations
 - **TRS** on the dashboard is an *availability proxy* (downtime vs an 8h shift);

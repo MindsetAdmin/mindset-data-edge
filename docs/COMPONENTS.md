@@ -19,7 +19,7 @@ features. For the high‑level design and data flow, see [ARCHITECTURE.md](ARCHI
 | `main.go` | Builds the function registry, opens the KG, connects MQTT, starts the KG auto‑enrich subscriber and the LiveHub, registers all `/api/*` routes + `/api/ws`, wraps in CORS, serves on `:8080`. Holds the REST handlers (functions, connectors, pipelines list/save/run + examples, tags, machines, topics, config, dashboard pins, kg technical/domain, stats, health). |
 | `tags.go` | **`TagRegistry`** — latest value per OPC‑UA tag (from `mindset/raw/#`), persisted to the SQLite `tags` table. Backs `GET /api/tags`. |
 | `live.go` | **`LiveHub`** — one `mindset/#` subscription. Feeds `TagRegistry`, `TopicRegistry` (msg/s rates + category), `StateTracker` (Running/Stopped + transition history), and keeps the latest **dashboard pin** per label. Broadcasts `tag`/`state`/`event`/`dashboard` over WebSocket. |
-| `ws.go` | **`wsHub`** — upgrades `/api/ws`, tracks clients, `broadcast(type,data)` fans out JSON to all (safe concurrent writes). |
+| `ws.go` | **`wsHub`** — upgrades `/api/ws`, tracks clients, `broadcast(type,data)` fans out JSON to all (concurrency‑safe, with a per‑client **write deadline** so one slow/dead client can't stall the feed). |
 
 ---
 
@@ -108,6 +108,7 @@ features. For the high‑level design and data flow, see [ARCHITECTURE.md](ARCHI
 | File | What it does |
 |---|---|
 | `index.html` | HTML shell, title "MindSet Data". |
+| `public/logo.png` | The MindSet Data logo, served at `/logo.png` (used in the NavBar). |
 | `vite.config.js` | Dev `:5173`; proxy `/api` → `:8080` with `ws:true` (REST + WebSocket). |
 | `src/main.jsx` | React entry; `BrowserRouter`. |
 | `src/App.jsx` | Router shell (NavBar + 6 routes inside `ErrorBoundary`). |
@@ -133,14 +134,14 @@ features. For the high‑level design and data flow, see [ARCHITECTURE.md](ARCHI
 ### Components (`src/components/`)
 | File | What it does |
 |---|---|
-| `NavBar.jsx` | 6‑tab navigation + brand. |
+| `NavBar.jsx` | 6‑tab navigation + the **MindSet Data logo** (`public/logo.png`). |
 | `Palette.jsx` | Draggable function blocks (connectors excluded). |
 | `NodeConfigPanel.jsx` | Guided config: header (icon + category badge) + description, labelled fields with help/examples, pickers, **OPC‑UA machine/tag selector**, **cost source + CSV/Excel rate upload + live preview**, delete. |
 | `PickerModal.jsx` | Generic searchable chooser. |
 | `CytoscapeGraph.jsx` | React wrapper around Cytoscape. |
 | `ErrorBoundary.jsx` | Catches render errors. |
 | `LiveDataPanel.jsx` | Pick tag(s) → live multi‑line chart over WebSocket. |
-| `DashboardPinsPanel.jsx` | Widgets pinned via `add_to_dashboard` (snapshot on load + live). |
+| `DashboardWidgets.jsx` | **Interactive widgets** for `add_to_dashboard` data: add from available sources, pick chart type (line/bar/gauge/value/status) + time range (1m–24h), live stats (Last/Min/Max/Avg/Count), `✕`/`⚙️` controls, persisted in **localStorage**. Parses values (never raw JSON). |
 | `nodes/PipelineNode.jsx` | Pipeline‑step node; **outputs are input‑only sinks** (no output port). |
 | `nodes/TriggerNode.jsx` | The entry/trigger node. |
 | `nodes/ZoneNode.jsx` | ENTRÉE/CŒUR/SORTIE background bands. |
