@@ -141,7 +141,13 @@ pure‑Go (`modernc.org/sqlite`) so binaries are self‑contained (no CGO).
 | `calculate_cost` | calculate | € cost from duration × hourly rate |
 | `threshold` | condition | Is value within [min,max]? (micro‑stop window) |
 | `mqtt_publish` | output | Publish to an MQTT topic |
+| `add_to_dashboard` | output | Pin the data/event onto the Dashboard (`mindset/dashboard/<label>`) |
 | `kg_save` | output | Save to KG — **not** in the server palette (KG is automatic) |
+
+Outputs are **sinks**: in the builder they have an input port only (no output
+port). `calculate_cost` supports a rate **source** (Manual / from `agent.yaml` /
+from a tag) and a per‑product **rate table** uploaded from CSV/Excel
+(`config.rates`, keyed by the event's `product`).
 
 ### 4.5 Pipelines
 A pipeline is YAML in `config/pipelines/` with a **trigger** + **nodes** (each has
@@ -154,9 +160,12 @@ satisfied). Built‑ins:
 
 ### 4.6 Knowledge Graph: two graphs
 - **Technical graph** (`kg/builder.go`, `/api/kg/technical`) — the *architecture*:
-  Connections, Topics, Pipelines, Dashboards. **External‑only model**: a Pipeline
-  node links to connections/topics/dashboards and carries a `functions` count — it
-  does **not** expose its internal functions.
+  Connections, Topics, Pipelines, Dashboards. Derived **only from the pipelines you
+  build** (empty until you create one; the shipped examples don't appear).
+  **External‑only model**: a Pipeline node links to connections/topics/dashboards
+  and carries a `functions` count — it does **not** expose its internal functions.
+  Pipelines with the **same function signature** are **grouped** into one node that
+  lists all their tags (property `tags`).
 - **Domain graph** (`kg/graph.go`, `/api/kg/domain`) — the *data*: `Equipment`,
   `Event` (micro‑stops), `Cause`, `Cost` nodes with `occurred_at` / `caused_by` /
   `costs` edges.
@@ -179,49 +188,60 @@ satisfied). Built‑ins:
 | `GET /api/config` | safe subset of `agent.yaml` (opcua endpoint/security, broker, hourly rate, site/area) |
 | `GET /api/functions[?type=]` | function catalog (optionally filtered by type) |
 | `GET /api/connectors` | connector functions only |
-| `GET /api/pipelines` | pipelines loaded from `config/pipelines/` |
+| `GET /api/pipelines` | your pipelines loaded from `config/pipelines/` |
 | `POST /api/pipelines` | save a pipeline as YAML (validated, id sanitized) |
+| `GET /api/pipelines/examples` | shipped template pipelines (`config/pipelines/examples/`) |
 | `POST /api/pipelines/{id}/run` | execute a pipeline; returns per‑node status + timing |
 | `GET /api/tags` | live OPC‑UA tags + values (persisted) |
 | `GET /api/machines` | tags grouped by work center + live Running/Stopped state |
 | `GET /api/topics` | live topics + msg/s + category + broker_connected |
+| `GET /api/config` | safe subset of `agent.yaml` |
+| `GET /api/dashboard/pins` | current dashboard pins (from `add_to_dashboard`) |
 | `GET /api/kg/technical` | technical (architecture) graph |
 | `GET /api/kg/domain` | domain (data) graph |
 | `GET /api/stats` | counts + micro‑stops/downtime/cost + uptime + broker status |
+| `WS  /api/ws` | **WebSocket** live push: `{type:"tag"\|"state"\|"event"\|"dashboard"}` |
 
-CORS is enabled; in dev the Vite proxy forwards `/api` → `:8080`.
+CORS is enabled; in dev the Vite proxy forwards `/api` (HTTP **and** the
+WebSocket upgrade, `ws:true`) → `:8080`.
 
 ---
 
 ## 6. Frontend (React + Vite)
 
 Stack: **React 19**, **Vite**, **React Router**, **Zustand** (cross‑page state),
-**ReactFlow** (canvas), **Cytoscape** (KG), **Recharts** (dashboard), **Tailwind**.
+**ReactFlow** (canvas), **Cytoscape** (KG), **Recharts** (charts), **xlsx**
+(CSV/Excel parsing), **WebSocket** (live push), **Tailwind**.
 
 ### 6.1 Pages (`src/pages/`)
 | Page | Route | What it does |
 |---|---|---|
 | `OverviewPage` | `/overview` | Landing: key stats + quick links |
 | `ConnectPage` | `/connect` | Pick a connector → applies to the pipeline trigger |
-| `BuilderPage` | `/compose` | **Drag‑and‑drop builder** (ReactFlow): ENTRÉE/CŒUR/SORTIE bands, function/field pickers, Save (→YAML), Run, delete node |
-| `PipelinesPage` | `/pipelines` | List/search predefined pipelines; 1‑click load or run |
-| `DashboardPage` | `/dashboards` | **Real‑time ops dashboard** (auto‑refresh 5s) |
+| `BuilderPage` | `/compose` | **Drag‑and‑drop builder** (ReactFlow): ENTRÉE/CŒUR/SORTIE bands, guided config panel, function/field pickers, **smart validation + duplicate prevention**, Save (→YAML), Run, delete node |
+| `PipelinesPage` | `/pipelines` | Two sections: **your** pipelines (run/load) + **templates** (load) |
+| `DashboardPage` | `/dashboards` | **Real‑time ops dashboard**, **WebSocket‑driven** (20s heartbeat fallback): KPIs, pinned widgets, live tag chart, recent events, machine status, Gantt |
 | `KnowledgeGraphPage` | `/kg` | Cytoscape viewer, Technique/Domaine toggle + type filters |
 
 ### 6.2 Components (`src/components/`)
-`NavBar`, `Palette` (function blocks), `NodeConfigPanel` (config + pickers + delete),
-`PickerModal` (searchable chooser), `CytoscapeGraph`, `ErrorBoundary`, and custom
-ReactFlow nodes `nodes/{PipelineNode,TriggerNode,ZoneNode}`.
+`NavBar`, `Palette`, `NodeConfigPanel` (guided config: header/badge/description,
+labelled fields + help/examples, pickers, OPC‑UA machine+tag selector, cost
+source + CSV/Excel rate upload + live preview, delete), `PickerModal`,
+`CytoscapeGraph`, `ErrorBoundary`, **`LiveDataPanel`** (pick tags → live chart),
+**`DashboardPinsPanel`** (`add_to_dashboard` widgets), and ReactFlow nodes
+`nodes/{PipelineNode,TriggerNode,ZoneNode}` (outputs are input‑only sinks).
 
 ### 6.3 Libraries (`src/lib/`)
 | File | Purpose |
 |---|---|
 | `pipelineMapping.js` | Convert canvas ⇄ backend Pipeline (zones, trigger, depends_on) |
 | `functionMeta.js` | Icons/colors/categories per function type |
+| `functionDocs.js` | Per‑function description + field labels/help/examples (guided panel) |
 | `functionDefaults.js` | Default config seeded when a function node is added |
 | `connectorTemplates.js` | Default config per connector + trigger type |
 | `kgGraph.js` | Map KG JSON → Cytoscape elements + styles |
-| `dashboardData.js` | Join domain graph → events/causes/costs, today/yesterday, Pareto |
+| `dashboardData.js` | Join domain graph → events (cause/cost), today/yesterday |
+| `useLiveSocket.js` | WebSocket hook (auto‑reconnect) for live push |
 
 ### 6.4 State & API
 - `src/store/studioStore.js` (Zustand) carries cross‑page intents: *Connect → apply
@@ -355,14 +375,40 @@ still runs; live values/rates/state are limited and persisted tags are shown.
 
 ---
 
-## 10. Notes & limitations
+## 10. Feature log (what was built, in order)
+
+1. **Standalone API server** (`cmd/server`) — runs the whole UI backend with no
+   OPC‑UA/MQTT required to start.
+2. **Drag‑and‑drop builder** (Compose) — ReactFlow canvas, palette, save → YAML.
+3. **Connector selection** — pick a connector, applied to the trigger; templates.
+4. **In‑app Knowledge Graph** — Cytoscape, Technique/Domaine toggle + filters.
+5. **Real‑time dashboard** — KPIs, recent events, machine status, Gantt timeline.
+6. **Agent HTTP removed** — `cmd/agent` is purely the edge runtime now.
+7. **Live OPC‑UA tag bridge** — server subscribes `mindset/raw/#`, `/api/tags`,
+   tag picker shows real tags + values (persisted to SQLite).
+8. **Real‑data bridge** — `/api/machines` (status), `/api/topics` (rates/category),
+   `/api/config` (from `agent.yaml`); pickers use real data.
+9. **WebSocket live push** — `/api/ws`; the dashboard updates on push.
+10. **Live tag chart** (`LiveDataPanel`) — pick tags, watch values stream.
+11. **KG = only your pipelines**; predefined ones become **loadable templates**
+    (`/api/pipelines/examples`).
+12. **`add_to_dashboard`** output + **pinned widgets** panel (snapshot + live).
+13. **Guided builder** — descriptions, labelled fields with help/examples, OPC‑UA
+    machine+tag selection, smart validation, **duplicate prevention**.
+14. **Cost config** — rate source (Manual/Config/Tag), currency, **CSV/Excel**
+    per‑product rates, live preview.
+15. **Output sinks** (input‑only ports), **KG tag grouping**, **Pareto removed**.
+
+## 11. Notes & limitations
 - **TRS** on the dashboard is an *availability proxy* (downtime vs an 8h shift);
   true OEE needs production‑count + quality data not yet captured.
 - **"vs hier"** deltas need events spanning two days to show a baseline.
 - **Modbus/SQL** connectors are demo stubs (metadata only).
 - Live values/rates/state require the agent to be actively publishing; otherwise
   tags persist (SQLite) but rates read 0 and state is last‑known.
-- The frontend updates the dashboard by **polling every 5s** (not WebSocket/SSE).
+- The dashboard is **WebSocket‑driven** with a **20s polling fallback**.
+- Pipeline **Run** executes on demand via the server; the agent's live data flow
+  (raw→UNS→events) runs independently in `cmd/agent`.
 
 
 
