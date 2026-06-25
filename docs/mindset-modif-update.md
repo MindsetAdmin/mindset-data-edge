@@ -1,49 +1,102 @@
+Objective
+Transform the Dashboard's add_to_dashboard feature into a fully functional, interactive widget system where users can:
 
-1. Cost Configuration — calculate_cost
-When the user adds a calculate_cost function:
+See live data from add_to_dashboard as interactive widgets
 
-The configuration panel must display:
+Visualize data with graphs (time series, bar charts, gauges)
 
-Element	Requirement
-Hourly Rate Source	Radio buttons: Manual / From config / From tag
-Manual entry	Number input field with unit (€/h)
-From config	Pre-filled from agent.yaml (read-only with option to override)
-From tag	Dropdown to select a tag that contains the hourly rate (e.g., from ERP)
-Currency	Dropdown: EUR, USD, GBP
-Live preview	Show cost for typical durations: 30s, 1min, 3min, 5min
+Select what to display via a widget selector/manager
 
-2. Duplicate Pipeline Prevention
-Rule: A pipeline cannot be saved if it has the same combination of tags and functions as an existing pipeline.
+Customize each widget (size, chart type, refresh rate)
 
+🔍 Current Issue
+What I See Now
+text
+📌 Widgets épinglés
+● live
+Coût micro-stop
+63.75
+09:50:07
 
-3. Knowledge Graph — Pipeline Grouping
-Rule: When you build a pipeline with tags, and then add the same pipeline with different tags, the Knowledge Graph should show one pipeline node with all tags listed.
+Mon widget
+{"kind":"value","label":"Mon widget"}
+15:39:20
 
-4. Output Functions — Single Connection Point
-Current Behavior
-Output functions (mqtt_publish, add_to_dashboard) currently have 2 connection points (input + output).
+Température machine1
+23.7
+01:01:05
+Problems
+Issue	Description
+No graphs	Only raw text/numbers displayed
+No chart selection	Cannot choose chart type (line, bar, gauge, etc.)
+No data selection	Cannot choose which data to display
+Raw JSON visible	Shows {"kind":"value","label":"Mon widget"} instead of parsed data
+No widget management	Cannot add, remove, or rearrange widgets
+No time range	Cannot see historical data, only latest value
+📊 Required Solution
+User Experience Goals
+text
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│  📌 Widgets épinglés                                                  [+ Ajouter]  │
+├─────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                     │
+│  ┌───────────────────────────────────────────────────────────────────────────────┐ │
+│  │  Widget Selector (choose what to display)                                     │ │
+│  │  ┌─────────────────────────────────────────────────────────────────────────┐ │ │
+│  │  │  ○ Coût micro-stop    ● Température machine1    ○ Status machine1      │ │ │
+│  │  │  ○ Vitesse moteur     ○ Pression               ○ Compteur              │ │ │
+│  │  └─────────────────────────────────────────────────────────────────────────┘ │ │
+│  │  Chart Type: [Line ▼]  Time Range: [Last Hour ▼]  Refresh: [5s ▼]            │ │
+│  └───────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                     │
+│  ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│  │  📊 Température machine1                                      [✕] [⚙️]    │   │
+│  │  ┌─────────────────────────────────────────────────────────────────────┐   │   │
+│  │  │  25 │    ╭╮                                                       │   │   │
+│  │  │  24 │   ╭╯╰╮    ╭╮                                                │   │   │
+│  │  │  23 │  ╭╯  ╰╮  ╭╯╰╮                                              │   │   │
+│  │  │  22 │ ╭╯    ╰╮╭╯  ╰╮                                             │   │   │
+│  │  │     ├──┼──┼──┼──┼──┼──┤                                          │   │   │
+│  │  │     14:00  14:05  14:10  14:15                                    │   │   │
+│  │  └─────────────────────────────────────────────────────────────────────┘   │   │
+│  │  Dernière valeur: 23.7°C  |  Min: 22.1°C  |  Max: 24.8°C  |  Moy: 23.4°C │   │
+│  └─────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                     │
+│  ┌─────────────────────────────────────────┐  ┌─────────────────────────────────┐   │
+│  │  💰 Coût micro-stop                     │  │  🏭 Status machine1             │   │
+│  │  ┌───────────────────────────────────┐  │  │  ┌───────────────────────────┐  │   │
+│  │  │  80 │                           │  │  │  │  🟢 Running                │  │   │
+│  │  │  60 │    ╭──╮                   │  │  │  │  Dernier changement:        │  │   │
+│  │  │  40 │   ╭╯  ╰╮                  │  │  │  │  14:32:05                  │  │   │
+│  │  │  20 │  ╭╯    ╰──╮              │  │  │  │  Durée: 45s                │  │   │
+│  │  │     ├──┼──┼──┼──┼──┤           │  │  │  └───────────────────────────┘  │   │
+│  │  │     14:00  14:05  14:10        │  │  │                                  │   │
+│  │  └───────────────────────────────────┘  │  │  [Détails]                    │   │
+│  │  Dernier: 63.75€  |  Total: 247.50€   │  │  └─────────────────────────────────┘   │
+│  └─────────────────────────────────────────┘                                      │
+│                                                                                     │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+🎯 Acceptance Criteria
+Users can add widgets from available data sources
 
-Required Behavior
-Output functions must have only 1 connection point (input only).
+Each widget shows a graph/chart (Line, Bar, Gauge, Value, Status)
 
-Function	Current	Required
-mqtt_publish	Input + Output	Input only (no output port)
-add_to_dashboard	Input + Output	Input only (no output port)
+Users can select chart type when adding a widget
 
-5. Cost Calculation — Excel/CSV File Upload
+Users can choose time range (1m, 5m, 1h, 4h, 24h)
 
-Required Behavior
-Users can upload an Excel or CSV file containing cost data with multiple rates:
+Users can set refresh rate (1s, 5s, 10s, 30s)
 
-Product	Cost per Hour (€/h)	Cost per Unit (€)
-Product_A	85.00	2.50
-Product_B	95.00	3.20
-Product_C	75.00	1.80
-Default	85.00	2.00
+Widgets show statistics (Min, Max, Average, Last, Count)
 
-6. Dashboard: Remove "Pareto des causes" Section
+Widgets are live (update via WebSocket)
 
-Remove the Pareto section entirely from the Dashboard.
+Widgets are persistent (saved in localStorage)
 
-7. Dashboard: Fix add_to_dashboard
-Data/events published by add_to_dashboard must appear immediately on the Dashboard.
+Users can close widgets (✕ button)
+
+Users can configure widgets (⚙️ button)
+
+Raw JSON is never displayed (only parsed data)
+
+Dashboard has a clean, professional look

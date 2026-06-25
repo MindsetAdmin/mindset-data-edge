@@ -5,9 +5,14 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+// writeWait caps how long a single client write may block, so one slow/dead
+// client can't stall broadcasts to everyone else.
+const writeWait = 3 * time.Second
 
 // wsHub fans out live messages to all connected WebSocket clients.
 type wsHub struct {
@@ -57,6 +62,7 @@ func (h *wsHub) handle(w http.ResponseWriter, r *http.Request) {
 func (h *wsHub) writeOne(conn *websocket.Conn, payload []byte) {
 	h.writeMu.Lock()
 	defer h.writeMu.Unlock()
+	_ = conn.SetWriteDeadline(time.Now().Add(writeWait))
 	if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
 		conn.Close()
 	}
@@ -78,6 +84,7 @@ func (h *wsHub) broadcast(msgType string, data interface{}) {
 	h.writeMu.Lock()
 	defer h.writeMu.Unlock()
 	for _, c := range conns {
+		_ = c.SetWriteDeadline(time.Now().Add(writeWait))
 		if err := c.WriteMessage(websocket.TextMessage, payload); err != nil {
 			c.Close()
 			h.mu.Lock()

@@ -3,7 +3,7 @@ import { fetchStats, fetchKnowledgeGraph, fetchMachines, fetchConfig } from '../
 import { buildEvents, effectiveCost, splitDays, deltaPct } from '../lib/dashboardData';
 import { useLiveSocket } from '../lib/useLiveSocket';
 import LiveDataPanel from '../components/LiveDataPanel';
-import DashboardPinsPanel from '../components/DashboardPinsPanel';
+import DashboardWidgets from '../components/DashboardWidgets';
 
 const FALLBACK_MS = 20000; // safety heartbeat; real-time comes from the WebSocket
 
@@ -106,7 +106,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Widgets pinned via the add_to_dashboard function */}
-        <DashboardPinsPanel />
+        <DashboardWidgets />
 
         {/* Live, user-selected tag data */}
         <LiveDataPanel />
