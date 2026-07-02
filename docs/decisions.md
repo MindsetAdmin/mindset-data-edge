@@ -6,6 +6,257 @@
 
 ---
 
+## Corrections & Late Decisions (Sprint 3 cont. — June 2026)
+
+---
+
+### Target market: 15K+ EU mid-sized factories TAM, initial GTM focus on 4 high-value verticals
+
+**Decision:** MindSet's total addressable market is **15,000+ European mid-sized factories**. Initial go-to-market focus is **4 high-value verticals**:
+- 💊 **Pharma**
+- 💄 **Cosmetics**
+- 🌾 **Agrifood**
+- ⚙️ **Metallurgy**
+
+Geographic execution starts in France (founders' geography + Boost10x network), expanding to DACH + Italy + Spain + Nordics in V2-V3.
+
+**Rationale:** All 4 verticals share traits that fit MindSet's product:
+- High willingness to pay (high-value products, regulated)
+- Sovereignty-sensitive (GMP / EU Cosmetic Regulation / HACCP / industry security requirements)
+- High and measurable financial impact from downtime + waste
+- Well-suited to the deterministic rules engine + OF-state Fuzzy Join + cost-in-€ model
+
+TAM math: ~12,000-25,000 EU mid-sized factories across these 4 verticals. At conservative 30k€/site/year pricing → ~450M€ TAM. At pharma-supported 100k€/site/year → ~1.5B€ TAM. Both numbers are credible for a pre-seed investor pitch.
+
+**Important downstream tension flagged (not locked yet, see analysis_log Entry 37):** the 4 verticals don't share the same sales motion. Agrifood + metallurgy fit the original ETI Plant-Manager self-serve <30k€ motion; pharma + cosmetics typically require enterprise IT-led 6-12 month cycles + ISO 27001 + GAMP 5. Likely needs two parallel sales motions — to be locked as a separate decision once explicitly confirmed.
+
+**Alternatives rejected:**
+- ETI manufacturing only (no vertical focus) — too generic, weakens positioning
+- All verticals at once (utilities, energy, logistics included) — fragments positioning, weakens vs UMH / Cognite
+- Pharma-only or single-vertical — narrows TAM unnecessarily, ties success to one regulatory environment
+- Geographic execution multi-country from V1 — not realistic with 2 founders + 2 interns
+
+---
+
+### Local MQTT broker: bundled in multi-container docker-compose (NOT separate install)
+
+**Decision:** Mosquitto runs as a sidecar container in MindSet's docker-compose. Customer install command remains a single `docker compose up`. Customer does NOT have to install or maintain Mosquitto separately.
+
+**Rationale:** The "48h deployment" + "one Docker command" pitch claim is preserved. Customer's IT team doesn't have to evaluate / approve / patch Mosquitto separately — it's part of the MindSet image we ship and update. Mosquitto config is locked-down (localhost-only listener, no auth needed since intra-container) and bundled with the edge agent's deployment unit.
+
+**Alternatives rejected:**
+- Separate Mosquitto install (breaks "1 command" pitch, adds customer-side maintenance burden, adds CVE patching responsibility on the customer).
+- Embed an MQTT broker library in the Go binary (e.g., embedded mochi-mqtt). Reduces operational complexity but adds binary size + tighter coupling; revisit at V2 if Mosquitto becomes a maintenance pain.
+
+---
+
+---
+
+### Licensing model: PROPRIETARY (closed-source) for first 2 years — supersedes prior Apache 2.0 decision
+
+**Decision:** MindSet Data is shipped as **closed-source proprietary software** for at least the first 2 years (V1, V2). Customers receive compiled Go binaries + React build, not source code. The decision is reconsidered in 2028 — open-core or source-available options remain on the table for that horizon.
+
+**Rationale:** Early-stage company protection. Closed source preserves commercial control during PMF discovery and prevents free-rider competitors from forking before MindSet has captured customer relationships. Two years of closed runway also lets the team focus on customer acquisition rather than community management.
+
+**Trade-off accepted:** Loses the "Apache 2.0 vs Cognite proprietary" line in the comp matrix. UMH now wins outright on OSS dimension. Compensated by stronger positioning on sovereignty + edge-native + OF-based Fuzzy Join + MCP + simplicity.
+
+**Alternatives rejected:**
+- Apache 2.0 from V1 (previous decision) — exposes IP to fast-follower competitors with no defensive moat in early years.
+- Source-available BSL/PolyForm — adds legal complexity + customer confusion without the trust upside of true OSS.
+- Open-core from V1 — splits engineering attention between OSS edge agent and proprietary cloud, premature for a 1-engineer team.
+
+---
+
+### Fuzzy Join algorithm: OF-state-based attribution — supersedes prior sliding-window decision
+
+**Decision:** MindSet's OT/IT reconciliation works by **reading Fabrication Order (OF) state from the ERP** — polling for OFs currently in status "In Progress" / "Released" — and tagging every OT event happening during an active OF with that OF's metadata (product, OF ID, planned schedule). The algorithm joins on **OF state, not on timestamps**.
+
+**Rationale:** The ±10 min sliding-window approach (in original docs) fails on real ERP data. Mid-market ERPs are updated by operators end-of-shift; ERP timestamps lag OT by hours, not minutes. OF-state-based attribution is robust to this multi-hour clock skew. The result: every micro-stop, every kWh, every defect is correctly tagged with product + OF without per-customer time-sync engineering.
+
+**Trade-off accepted:** Requires ERP integration (no Fuzzy Join without ERP — which is fine since ERP connector is now V1). Cannot attribute events to OFs that aren't represented in the ERP at the time the event occurs (rare in practice).
+
+**Alternatives rejected:** Sliding-window time-based join (breaks on real ERP latency); rely solely on operator-entered OF assignment (manual burden, error-prone).
+
+---
+
+### Edition naming: On-Premise / Hybrid / Self-Hosted — supersedes Air-Gap / Sovereign Cloud / BYOC
+
+**Decision:** The three deployment editions are renamed to consumer-friendly terminology:
+- **On-Premise** (formerly Air-Gap) — zero cloud, per-site only. Target: defense, public sector, sensitive pharma.
+- **Hybrid** (formerly Sovereign Cloud) — Scaleway FR / OVH FR for multi-site KG + remote dashboard + backup. Default.
+- **Self-Hosted** (formerly BYOC) — customer deploys cloud tier on their EU cloud or on-prem Kubernetes.
+
+**Rationale:** Plain-language names land better with Plant Manager / CFO buyers who don't speak DevOps. "Air-Gap" is technical jargon; "BYOC" is industry acronym. "On-Premise / Hybrid / Self-Hosted" is the same thing in language any buyer understands.
+
+**Alternatives rejected:** Keep technical names (less accessible); use "Local / Cloud / Custom" (loses the sovereignty implication).
+
+---
+
+### Hyperscaler edition: NOT offered in V1-V2-V3 — reconsider 2029 for international scaling
+
+**Decision:** No AWS / Azure / GCP edition through V1, V2, V3 (through ~2029). The "no hyperscaler" stance holds for at least 3 years. **In 2029**, reconsider adding hyperscaler support for international (US / APAC) expansion — at that point the EU sovereignty moat is established and adding hyperscaler support targets a different market segment.
+
+**Rationale:** Adding hyperscalers in V1-V3 collapses the sovereignty moat for the highest-value EU verticals (defense, public sector, regulated pharma). The TAM expansion isn't worth losing the differentiation. International expansion is a 2029+ concern — by then the EU footprint is real, the sovereignty pitch has been validated by reference customers, and a separate "Global Edition" with hyperscalers becomes a SEPARATE PRODUCT LINE, not a dilution of the core offering.
+
+**Alternatives rejected:** Add hyperscalers in V1-V2 (kills sovereignty moat early); never add them (caps TAM permanently at EU manufacturing — leaves international upside on the table).
+
+---
+
+## V1 Scope & AI-Native Positioning (Sprint 3 — June 2026)
+
+---
+
+### Platform-first positioning with 3 starter use-case templates
+
+**Decision:** MindSet is positioned as an AI-native edge **platform**, not a single-use-case product. V1 ships with 3 ready-to-use templates that customers can deploy on day 1: **micro-stop detection**, **energy waste detection**, and **OEE / TRS dashboard**. Customers and their AI agents can build additional use cases (quality, changeover, predictive, etc.) on top of the platform.
+
+**Rationale:** "Don't impose micro-stops" — first customers will reveal which use cases to invest in. But "platform without a vertical" is the classic startup death — too generic to demo, too long a sales cycle. The 3 starter templates give Plant Managers something concrete to see in the demo while the platform claim defends broader TAM and customer-led roadmap.
+
+**Alternatives rejected:**
+- Single-use-case positioning ("micro-stop detection product") — narrows TAM and contradicts the AI-native + platform pitch.
+- Pure platform ("you build everything") — no demo, no first-customer hook, indistinguishable from UMH.
+- 5+ starter templates — over-scopes V1, dilutes the polish on each.
+
+---
+
+### AI-native from V1 (not V2)
+
+**Decision:** AI capabilities ship in V1, not as a V2 add-on. V1 includes: Phi-3 / Ollama local runtime, edge MCP server exposing the KG, and one native AI agent (Ad-hoc Analyst). The product narrative becomes "AI-native edge industrial platform," not "industrial platform with AI added later."
+
+**Rationale:** 2026 investor expectation is AI-native by default. Shipping AI in V2 makes the deck look behind the curve. AI integrated from the beginning also de-risks the architecture — no last-minute retrofit needed.
+
+**Alternatives rejected:**
+- AI in V2 (per original roadmap) — weak investor pitch in 2026 ("we'll add AI later"), risks late-stage architecture rework.
+- Multiple agents at V1 — over-scopes the first ship, dilutes quality of each. One excellent agent beats five mediocre.
+
+---
+
+### ERP connectors in V1 (pulled forward from V1 mid-roadmap)
+
+**Decision:** SQL connector (Fuzzy Join input) is part of V1, not V1.5. This makes Moat #2 (Fuzzy Join OT/IT) demoable from first customer install.
+
+**Rationale:** Fuzzy Join is the technical moat that distinguishes MindSet from UMH (no built-in Fuzzy Join) and from MaestroHub (no clear OT/IT temporal alignment). Demoing it requires an ERP connector. Pulling the SQL connector forward makes the moat real at V1, not a future promise.
+
+**Alternatives rejected:** Keep SQL connector at V1.5 — leaves Fuzzy Join undemoable in V1, undermines the strongest technical moat in the pitch.
+
+---
+
+### SQL connector V1 dialects: PostgreSQL + MSSQL + MySQL
+
+**Decision:** V1 SQL connector supports PostgreSQL (via `pgx/v5`), MSSQL (via `microsoft/go-mssqldb`), and MySQL/MariaDB (via `go-sql-driver/mysql`). Oracle and SAP HANA dialects deferred to V1.5+ based on customer demand signal.
+
+**Rationale:** PostgreSQL + MSSQL + MySQL covers ~80% of FR ETI ERP backends (Sage X3 = MSSQL, Dynamics 365 on-prem = MSSQL, Odoo = PostgreSQL, modern web ERPs = MySQL). Oracle is tied to large-account SAP deals which aren't first-customer targets. SAP HANA is enterprise S/4HANA territory — wrong segment for MindSet's ETI mid-market.
+
+**Alternatives rejected:**
+- PostgreSQL only (covers ~30% of FR ETIs — leaves Sage / Dynamics customers blocked).
+- All 5 dialects in V1 (Oracle + HANA = high effort for wrong segment).
+
+---
+
+### MCP server: edge-only in V1, cloud relay deferred to V1.5+
+
+**Decision:** V1 MCP server runs at the edge only, exposing the local KG to AI agents inside the customer's network (Claude Desktop, Copilot, MindSet's native agent). Cloud MCP relay for remote AI access is deferred to V1.5+ based on remote-access demand signal.
+
+**Rationale:** Edge-only MCP simplifies V1 architecture (one binary, no cross-network auth), preserves the sovereignty default (data stays where it was generated), and is sufficient for the V1 customer profile (Plant Manager working inside the factory, occasional founder demo with Claude Desktop on a laptop on the factory LAN).
+
+**Alternatives rejected:** Cloud-only MCP — breaks sovereignty default. Edge + cloud relay at V1 — doubles the V1 architecture surface for no first-customer benefit.
+
+---
+
+### V1 native AI agent: Ad-hoc Analyst (sole agent)
+
+**Decision:** V1 ships exactly one native AI agent: **Ad-hoc Analyst** — chat UI embedded in the local dashboard, Phi-3 local default, grounded answers via MCP-tool access to the KG. Cites the KG nodes / events used. All other agents from the 13-agent catalog (Daily Briefing, Discovery Coach, Tribal Knowledge Chatbot, Causality Reasoner, etc.) are V1.5+ or V2.
+
+**Rationale:** One excellent demoable agent beats five mediocre ones. Ad-hoc Analyst is the strongest demo (Plant Manager types a question, gets a real answer with sources — the chat UX every 2026 user expects). Built on the same MCP infrastructure, so it doubles as proof-of-concept for the MCP integration. Simple enough to ship within the V1 timeline.
+
+**Alternatives rejected:**
+- Discovery Coach first — useful but onboarding-only, weaker demo than Q&A.
+- Daily Briefing first — needs accumulated data, doesn't demo well on day 1.
+- 3-5 agents in V1 — over-scopes for a 1-engineer team.
+
+---
+
+### Tribal Knowledge moat ships in V1 via dropdown + free text (NOT V2 chatbot)
+
+**Decision:** Moat #4 (Tribal Knowledge) ships in V1 as a 1-click cause dropdown + free-text field on every detected stop event, with the cause linked to the stop event in the KG. The V2 chatbot (Phi-3 conversational interview) is a stretch goal for richer capture UX, not the moat itself.
+
+**Rationale:** Re-reading the moat definition in `docs/mindset.md` section 15: *"sensor pattern → operator label associations: impossible to reconstruct without on-site real-time access."* **The moat is the DATASET, not the UX that captures it.** A simple dropdown + free text accumulates the same site-specific pattern as a sophisticated chatbot would. The chatbot is polish, not the moat. This makes Tribal Knowledge a V1-realisable claim instead of a V2 promise.
+
+**Alternatives rejected:**
+- Defer Tribal Knowledge entirely to V2 — leaves one of the 5 moats undemonstrable at first customer install.
+- Phi-3 conversational chatbot in V1 — Phi-3 conversational quality in French + operator jargon + interruption-handling is too risky for V1 ship.
+
+---
+
+## Strategic Positioning (Sprint 2 — June 2026)
+
+---
+
+### Three deployment editions: Air-Gap / Sovereign Cloud / BYOC — no hyperscaler edition
+
+**Decision:** The product is offered in exactly three editions:
+- **Air-Gap** — zero cloud component. Per-site only. No multi-site, no remote dashboard. Target: defense, public sector, sensitive pharma, nuclear.
+- **Sovereign Cloud (default)** — Scaleway FR / OVH FR for cross-site KG aggregation, multi-site dashboard, encrypted backup, heartbeat monitor.
+- **BYOC** — customer deploys the cloud tier on their own EU-jurisdiction cloud (Hetzner, IONOS, T-Systems, 3DS Outscale) or on-premise Kubernetes.
+
+There is **no hyperscaler edition**. AWS, Azure, GCP (including their EU regions) are explicitly excluded.
+
+**Rationale:** Lets customers self-select by sovereignty needs. Defense and regulated industries get pure air-gap. Commercial ETI gets the convenient default. Large multi-site customers with existing EU cloud relationships get BYOC. Excluding hyperscalers preserves the regulatory moat — US CLOUD Act exposure on AWS-EU and Azure-EU would invalidate the sovereignty pitch for public sector and defense buyers.
+
+**Alternatives rejected:** Single one-size SaaS (excludes air-gap and regulated industries); supporting AWS/Azure to broaden TAM (breaks sovereignty story for the highest-value verticals).
+
+---
+
+### Cloud tier scope: aggregation + remote view + backup + heartbeat only
+
+**Decision:** Cloud tier is limited to: cross-site KG aggregation, multi-site / remote dashboard serving, site management API (auth + keys + entitlements), encrypted KG snapshots, alerting heartbeat (liveness monitor). Nothing else runs in the cloud.
+
+**Rationale:** A feature goes to the cloud only when it satisfies all three: (1) it needs to span multiple sites or be reached from outside the factory, (2) latency tolerates >1s round-trip, (3) only already-transformed data crosses the boundary. Discovery, contextualization, rules engine, cost model, Fuzzy Join, dashboards, alerting, AI agents, and MCP server all run at the edge.
+
+**Alternatives rejected:** Cloud-side pipeline execution (latency + sovereignty issues); cloud-side rules engine (sub-second decisions impossible from cloud round-trip); cloud-side SLM (defeats the local-first sovereignty default).
+
+---
+
+### Alerting: edge-direct SMTP/Slack/Teams, cloud component is heartbeat monitor only
+
+**Decision:** The edge agent sends emails, Slack, and Teams alerts directly via the customer's outbound HTTPS / SMTP. The cloud component related to alerting is a **liveness / heartbeat monitor** that alerts when an edge agent stops reporting — not a general-purpose SMTP relay.
+
+**Rationale:** Honest framing of the actual value. In practice, almost all customers can send outbound SMTP from the factory. The real reason to have a cloud-side alerting component is to detect a dead edge agent. Reframing the component clarifies its actual purpose for both customers and internal team.
+
+**Alternatives rejected:** Generic cloud SMTP relay (used by <10% of customers in practice, muddies the architecture story); no cloud alerting at all (loses ability to detect dead edge agents — important for operations).
+
+---
+
+### MCP server: essential feature, edge-default with optional cloud relay
+
+**Decision:** MindSet exposes its Knowledge Graph and pipelines via a Model Context Protocol (MCP) server, running on the edge by default. External AI agents (Claude Desktop, Copilot, ChatGPT custom connectors, etc.) connect to the local MCP server. An optional cloud MCP relay is offered for customers needing remote AI access without setting up a VPN.
+
+**Rationale:** MCP is becoming the de-facto standard for AI agent integrations. Native MCP support is a strong differentiator vs Cognite (closed proprietary AI Atlas SDK) and most mid-market rivals. Edge-default preserves the sovereignty pitch — the AI agent comes to the data, not the reverse.
+
+**Alternatives rejected:** REST/GraphQL-only API for AI agents (won't plug into Claude Desktop / Copilot natively, weaker investor story); cloud-only MCP server (breaks the sovereignty default — defeats the purpose).
+
+---
+
+### AI provider strategy: local-default + optional remote with explicit disclosure (Option B)
+
+**Decision:** Phi-3 via Ollama is the default local LLM. Customer can plug any LLM (OpenAI, Anthropic, Mistral, Aleph Alpha, Azure OpenAI) via configuration. When remote LLM is enabled, the UI explicitly warns the operator: *"Data will leave your network / EU."*
+
+**Rationale:** Sovereignty pitch holds **by default**. Customer has flexibility for use cases where they want to use existing LLM contracts (e.g., an enterprise Azure OpenAI agreement). The explicit warning preserves the founder's honesty contract — informed consent rather than silent leak.
+
+**Alternatives rejected:** Strict local-only (limits flexibility — locks out customers with existing LLM relationships); any-LLM-no-warnings (cannot claim sovereignty as default value prop — undermines the entire pitch); strict EU-LLM-only (Mistral/Aleph Alpha only — too narrow, prevents Azure OpenAI integration which is common in enterprise).
+
+---
+
+### BYOC scope: EU-jurisdiction cloud OR customer's on-prem Kubernetes only
+
+**Decision:** "Bring Your Own Cloud" means EU-jurisdiction cloud (Scaleway, OVH, Hetzner, T-Systems, IONOS, 3DS Outscale) or the customer's own on-premise Kubernetes. AWS, Azure, GCP — including their EU regions — are explicitly excluded.
+
+**Rationale:** AWS-EU and Azure-EU regions are subject to the US CLOUD Act, which lets US authorities compel data disclosure regardless of physical location. This invalidates the sovereignty pitch for FR public sector, defense, and regulated industries. The sovereignty moat must hold cleanly — accepting hyperscalers would let competitors (and customers) frame MindSet as "another SaaS that pretends to be sovereign."
+
+**Alternatives rejected:** Any-cloud BYOC including AWS/Azure (broadens TAM but breaks the regulatory moat for the highest-value verticals); Scaleway/OVH only (too narrow — locks out customers with existing EU cloud relationships at Hetzner, T-Systems, etc.).
+
+---
+
 ## OPC-UA Discovery (Sprint 1 — June 2026)
 
 ---

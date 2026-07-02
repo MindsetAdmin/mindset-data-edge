@@ -43,6 +43,7 @@ type server struct {
 	topics       *TopicRegistry
 	states       *StateTracker
 	live         *LiveHub
+	opcua        *OPCUAManager
 	cfg          *config.Config
 	mqttClient   mqtt.Client
 	startTime    time.Time
@@ -113,6 +114,11 @@ func main() {
 		}
 	}
 
+	// Dynamic, frontend-driven OPC-UA control plane. Idle until the UI calls
+	// /api/opcua/connect; publishes selected tags to the same broker the LiveHub
+	// already watches, so discovered tags surface via /api/tags + WebSocket.
+	opcuaMgr := NewOPCUAManager(broker, cfg)
+
 	srv := &server{
 		funcRegistry: buildRegistry(hourlyRate, mqttClient),
 		kg:           kgInstance,
@@ -122,6 +128,7 @@ func main() {
 		topics:       topicReg,
 		states:       stateTracker,
 		live:         hub,
+		opcua:        opcuaMgr,
 		cfg:          cfg,
 		mqttClient:   mqttClient,
 		startTime:    time.Now(),
@@ -137,6 +144,12 @@ func main() {
 	mux.HandleFunc("/api/machines", srv.handleMachines)
 	mux.HandleFunc("/api/topics", srv.handleTopics)
 	mux.HandleFunc("/api/config", srv.handleConfig)
+	mux.HandleFunc("/api/opcua/connect", srv.handleOpcuaConnect)       // POST: dynamic connect
+	mux.HandleFunc("/api/opcua/discover", srv.handleOpcuaDiscover)     // GET: browse tags
+	mux.HandleFunc("/api/opcua/subscribe", srv.handleOpcuaSubscribe)   // POST: select tags + modes
+	mux.HandleFunc("/api/opcua/disconnect", srv.handleOpcuaDisconnect) // POST: close session
+	mux.HandleFunc("/api/opcua/status", srv.handleOpcuaStatus)         // GET: connection status
+	mux.HandleFunc("/api/opcua/selections", srv.handleOpcuaSelections) // GET: per-tag routing (governance)
 	mux.HandleFunc("/api/dashboard/pins", srv.handleDashboardPins)
 	mux.HandleFunc("/api/kg/technical", srv.handleTechnicalGraph)
 	mux.HandleFunc("/api/kg/domain", srv.handleDomainGraph)

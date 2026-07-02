@@ -26,18 +26,19 @@ import {
   fetchMachines,
   fetchTopics,
   fetchConfig,
+  fetchOpcuaSelections,
 } from '../api/client';
 import { getCategory } from '../lib/functionMeta';
 import { defaultConfigFor, triggerTypeFor } from '../lib/connectorTemplates';
 import { defaultFunctionConfig } from '../lib/functionDefaults';
 import {
   flowToPipeline,
-  pipelineToFlow,
   slugify,
   TRIGGER_ID,
   makeZoneNodes,
   makeTriggerNode,
 } from '../lib/pipelineMapping';
+import { pipelineToFlowChainOnly } from '../lib/pipelineLoading';
 import { useStudioStore } from '../store/studioStore';
 
 const nodeTypes = { pipelineNode: PipelineNode, triggerNode: TriggerNode, zoneNode: ZoneNode };
@@ -45,14 +46,17 @@ const nodeTypes = { pipelineNode: PipelineNode, triggerNode: TriggerNode, zoneNo
 const makeInitialNodes = () => [...makeZoneNodes(), makeTriggerNode()];
 
 function BuilderInner() {
-  const [nodes, setNodes, onNodesChange] = useNodesState(makeInitialNodes());
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  // Read initial canvas state once at mount — no subscription, avoids re-render loop.
+  const { canvasNodes: initNodes, canvasEdges: initEdges, canvasMeta: initMeta } = useStudioStore.getState();
+
+  const [nodes, setNodes, onNodesChange] = useNodesState(initNodes ?? makeInitialNodes());
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initEdges ?? []);
   const [functions, setFunctions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [pipelines, setPipelines] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
-  const [meta, setMeta] = useState({ id: '', name: '', description: '' });
+  const [meta, setMeta] = useState(initMeta ?? { id: '', name: '', description: '' });
   const [status, setStatus] = useState(null);
   const [showFnPicker, setShowFnPicker] = useState(false);
   const [fieldPickers, setFieldPickers] = useState({ machine_id: [], topic: [], broker: [], node_id: [] });
@@ -65,6 +69,9 @@ function BuilderInner() {
   const pendingConnector = useStudioStore((s) => s.pendingConnector);
   const pipelineToLoad = useStudioStore((s) => s.pipelineToLoad);
   const clearPending = useStudioStore((s) => s.clearPending);
+  const saveCanvasState = useStudioStore((s) => s.saveCanvasState);
+  const clearCanvas = useStudioStore((s) => s.clearCanvas);
+  const addSelectedMachine = useStudioStore((s) => s.addSelectedMachine);
 
   useEffect(() => {
     loadFunctions();
@@ -72,21 +79,53 @@ function BuilderInner() {
     loadPickerOptions();
   }, []);
 
+  // Sync canvas state to the store so tab-switches within a session restore the canvas.
+  // Also track which machines are wired into state_machine nodes for Dashboard filtering.
+  useEffect(() => {
+    saveCanvasState(nodes, edges, meta);
+    nodes
+      .filter((n) => n.type === 'pipelineNode' && n.data?.function === 'state_machine' && n.data?.config?.machine_id)
+      .forEach((n) => addSelectedMachine(n.data.config.machine_id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, edges, meta]);
+
   async function loadPickerOptions() {
     let machine_id = [];
     let topic = [];
     let node_id = [];
     let broker = [];
+    // Governance: which work centers carry function-eligible (ISA-95/both) data.
+    // When the user has applied OPC-UA selections, function field pickers are
+    // restricted to those; raw-only tags are storage-only and never offered.
+    let isa95WorkCenters = new Set();
+    let hasSession = false;
+    try {
+      const sel = await fetchOpcuaSelections();
+      const list = sel.selections || [];
+      hasSession = list.length > 0; // an active session governs the function pickers
+      isa95WorkCenters = new Set(
+        list
+          .filter((s) => s.mode === 'isa95' || s.mode === 'both')
+          .map((s) => s.work_center)
+          .filter(Boolean)
+      );
+    } catch { /* best-effort — no active session means no restriction */ }
+    // When a session is active, only ISA-95/both work centers feed functions; a
+    // raw-only session yields an empty set (no function-eligible machines).
+    const govern = hasSession;
     // Machines (with live status) + their tags grouped by machine.
     try {
       const m = await fetchMachines();
       setMachines((m.machines || []).filter((x) => x.work_center !== '(autres)'));
       machine_id = (m.machines || [])
         .filter((x) => x.work_center !== '(autres)')
+        // Function picker: only ISA-95/both work centers when a session governs.
+        .filter((x) => !govern || isa95WorkCenters.has(x.work_center))
         .map((x) => ({
           value: x.work_center,
           label: x.work_center,
           sub: x.state ? (x.state.running ? 'Running ✅' : 'Stopped ❌') : `${x.tags.length} tags`,
+          badge: govern ? 'ISA-95' : undefined,
         }));
       node_id = (m.machines || []).flatMap((x) =>
         (x.tags || []).map((t) => ({
@@ -98,15 +137,18 @@ function BuilderInner() {
         }))
       );
     } catch { /* best-effort */ }
-    // Live MQTT topics with msg/s + category.
+    // Live MQTT topics with msg/s + category. Raw topics are storage-only, so
+    // they are not offered as function inputs (governance).
     try {
       const tp = await fetchTopics();
-      topic = (tp.topics || []).map((t) => ({
-        value: t.topic,
-        label: t.topic,
-        sub: `${t.rate_per_sec.toFixed(1)} msg/s`,
-        group: t.category,
-      }));
+      topic = (tp.topics || [])
+        .filter((t) => t.category !== 'raw')
+        .map((t) => ({
+          value: t.topic,
+          label: t.topic,
+          sub: `${t.rate_per_sec.toFixed(1)} msg/s`,
+          group: t.category,
+        }));
     } catch { /* best-effort */ }
     // Broker from agent.yaml.
     try {
@@ -279,18 +321,20 @@ function BuilderInner() {
     if (!id) return;
     const p = pipelines.find((x) => x.id === id);
     if (!p) return;
-    const flow = pipelineToFlow(p);
+    // Load the function chain only — user reconfigures inputs/outputs each time.
+    const flow = pipelineToFlowChainOnly(p);
     setNodes(flow.nodes);
     setEdges(flow.edges);
     setMeta({ id: p.id, name: p.name, description: p.description || '' });
     setSelectedId(null);
-    setStatus({ type: 'ok', msg: `Pipeline « ${p.id} » chargé.` });
+    setStatus({ type: 'ok', msg: `Pipeline « ${p.id} » chargé — reconfigurer les entrées/sorties.` });
   }
 
   function handleNew() {
     setNodes(makeInitialNodes());
     setEdges([]);
     setMeta({ id: '', name: '', description: '' });
+    clearCanvas(); // clear stored state + selectedMachines so next load starts fresh
     setSelectedId(null);
     setStatus(null);
   }
@@ -340,12 +384,13 @@ function BuilderInner() {
   useEffect(() => {
     if (!pipelineToLoad) return;
     const p = pipelineToLoad;
-    const flow = pipelineToFlow(p);
+    // Load the function chain only — user reconfigures inputs/outputs each time.
+    const flow = pipelineToFlowChainOnly(p);
     setNodes(flow.nodes);
     setEdges(flow.edges);
     setMeta({ id: p.id, name: p.name, description: p.description || '' });
     setSelectedId(null);
-    setStatus({ type: 'ok', msg: `Pipeline « ${p.name || p.id} » chargé.` });
+    setStatus({ type: 'ok', msg: `Pipeline « ${p.name || p.id} » chargé — reconfigurer les entrées/sorties.` });
     clearPending();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pipelineToLoad]);

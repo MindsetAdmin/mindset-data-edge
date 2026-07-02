@@ -1,0 +1,47 @@
+id: pipeline_microstop_detection
+name: Micro-stop Detection
+description: Détecte les micro-arrêts (30s-3min) à partir des changements de statut
+version: "1.0"
+enabled: true
+properties: {}
+trigger:
+    type: mqtt
+    function: mqtt_subscribe
+    config:
+        qos: 1
+        topic: mindset/raw/ns=3;i=1014
+nodes:
+    - id: state_machine
+      name: State Machine
+      type: transform
+      function: state_machine
+      config:
+        machine_id: machine1
+      depends_on:
+        - trigger
+    - id: duration
+      name: Duration
+      type: calculate
+      function: calculate_duration
+      config: {}
+      depends_on:
+        - state_machine
+    - id: threshold
+      name: Threshold (30s-3min)
+      type: condition
+      function: threshold
+      config:
+        max: 180
+        min: 30
+      depends_on:
+        - duration
+    - id: mqtt_publish
+      name: Publish Micro-stop
+      type: output
+      function: mqtt_publish
+      config:
+        qos: 1
+        topic: mindset/events/micro-stop
+      depends_on:
+        - threshold
+output: mqtt_publish

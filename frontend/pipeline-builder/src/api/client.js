@@ -98,6 +98,70 @@ export async function fetchStats() {
     return response.json();
 }
 
+// --- Dynamic OPC-UA control plane -----------------------------------------
+
+// opcuaConnect connects the server to a user-specified OPC-UA endpoint.
+// cfg: { endpoint, security_mode, security_policy, username, password, session_timeout }
+export async function opcuaConnect(cfg) {
+    const response = await fetch(`${API_BASE}/opcua/connect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cfg),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        throw new Error(body.error || `Failed to connect: ${response.statusText}`);
+    }
+    return body;
+}
+
+// opcuaDiscover browses the connected server and returns its tags.
+export async function opcuaDiscover() {
+    const response = await fetch(`${API_BASE}/opcua/discover`);
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        throw new Error(body.error || `Failed to discover tags: ${response.statusText}`);
+    }
+    return body;
+}
+
+// opcuaSubscribe starts monitoring the selected tags.
+// selections: [{ node_id, mode: 'raw'|'isa95'|'both' }]
+export async function opcuaSubscribe(selections) {
+    const response = await fetch(`${API_BASE}/opcua/subscribe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selections }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        throw new Error(body.error || `Failed to subscribe: ${response.statusText}`);
+    }
+    return body;
+}
+
+// opcuaDisconnect closes the current OPC-UA session.
+export async function opcuaDisconnect() {
+    const response = await fetch(`${API_BASE}/opcua/disconnect`, { method: 'POST' });
+    if (!response.ok) throw new Error(`Failed to disconnect: ${response.statusText}`);
+    return response.json();
+}
+
+// opcuaStatus returns the current connection status.
+export async function opcuaStatus() {
+    const response = await fetch(`${API_BASE}/opcua/status`);
+    if (!response.ok) throw new Error(`Failed to fetch OPC-UA status: ${response.statusText}`);
+    return response.json();
+}
+
+// fetchOpcuaSelections returns the current per-tag routing with ISA-95 mapping.
+// Used by the builder to restrict function field pickers to isa95/both tags.
+export async function fetchOpcuaSelections() {
+    const response = await fetch(`${API_BASE}/opcua/selections`);
+    if (!response.ok) throw new Error(`Failed to fetch OPC-UA selections: ${response.statusText}`);
+    return response.json();
+}
+
 // kind: 'technical' | 'domain'
 export async function fetchKnowledgeGraph(kind = 'technical') {
     const response = await fetch(`${API_BASE}/kg/${kind}`);

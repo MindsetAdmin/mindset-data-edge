@@ -9,6 +9,10 @@ opcua:
   endpoint: "opc.tcp://localhost:53530/OPCUA/SimulationServer"
   security_mode: "None"
   security_policy: "None"
+  session_timeout_seconds: 300
+  # auto_connect=false → the OPC-UA connection is driven from the web UI
+  # (cmd/server). Set true to restore the legacy agent-owned auto-discovery.
+  auto_connect: false
 
 discovery:
   scan_timeout_seconds: 10

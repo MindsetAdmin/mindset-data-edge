@@ -12,22 +12,22 @@ export default function OverviewPage() {
   }, []);
 
   const cards = [
-    { label: 'Pipelines', value: stats?.pipelines, icon: '🔧' },
-    { label: 'Fonctions', value: stats?.functions, icon: '⚙️' },
+
+    { label: 'Fonctions disponibles', value: stats?.functions },
   ];
 
   const steps = [
-    { to: '/connect', icon: '🔌', title: 'Connect', desc: 'Choisir une source de données' },
-    { to: '/compose', icon: '⚙️', title: 'Compose', desc: 'Construire le pipeline (drag & drop)' },
-    { to: '/pipelines', icon: '📡', title: 'Pipelines', desc: 'Charger / exécuter un pipeline' },
-    { to: '/dashboards', icon: '📊', title: 'Dashboards', desc: 'Voir les métriques temps réel' },
-    { to: '/kg', icon: '🧠', title: 'Knowledge Graph', desc: 'Explorer les relations' },
+    { to: '/connect', title: 'Connect', desc: 'Choisir une source de données' },
+    { to: '/compose', title: 'Compose', desc: 'Construire le pipeline (drag & drop)' },
+    { to: '/pipelines', title: 'Pipelines', desc: 'Charger / exécuter un pipeline' },
+    { to: '/dashboards', title: 'Dashboards', desc: 'Voir les métriques temps réel' },
+    { to: '/kg', title: 'Knowledge Graph', desc: 'Explorer les relations' },
   ];
 
   return (
     <div className="h-full overflow-y-auto p-6">
       <div className="max-w-4xl mx-auto">
-        <h1 className="text-2xl font-bold text-white mb-1">🧩 MindSet Data</h1>
+        <h1 className="text-2xl font-bold text-white mb-1">MindSet Data</h1>
         <p className="text-dark-400 text-sm mb-6">
           Construisez des pipelines industriels visuellement, exécutez-les, et explorez le graphe de connaissances.
         </p>

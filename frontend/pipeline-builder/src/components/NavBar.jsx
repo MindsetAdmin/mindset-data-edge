@@ -1,33 +1,48 @@
 import { NavLink } from 'react-router-dom';
+import {
+    LayoutDashboard,
+    Plug,
+    Workflow,
+    List,
+    BarChart3,
+    Network,
+} from 'lucide-react';
 
 const TABS = [
-  ['/overview', '🏠 Overview'],
-  ['/connect', '🔌 Connect'],
-  ['/compose', '⚙️ Compose'],
-  ['/pipelines', '📡 Pipelines'],
-  ['/dashboards', '📊 Dashboards'],
-  ['/kg', '🧠 KG'],
+    { to: '/overview', label: 'Overview', Icon: LayoutDashboard },
+    { to: '/connect', label: 'Connect', Icon: Plug },
+    { to: '/compose', label: 'Compose', Icon: Workflow },
+    { to: '/pipelines', label: 'Pipelines', Icon: List },
+    { to: '/dashboards', label: 'Dashboards', Icon: BarChart3 },
+    { to: '/kg', label: 'Knowledge Graph', Icon: Network },
 ];
 
 export default function NavBar() {
-  return (
-    <header className="bg-dark-900 border-b border-dark-700 px-4 py-2.5 flex items-center gap-6 shrink-0">
-      <img src="/logo.png" alt="MindSet Data" className="h-8 w-auto shrink-0" />
-      <nav className="flex gap-1">
-        {TABS.map(([to, label]) => (
-          <NavLink
-            key={to}
-            to={to}
-            className={({ isActive }) =>
-              `px-3 py-1.5 rounded-md text-sm transition ${
-                isActive ? 'bg-dark-700 text-white' : 'text-dark-400 hover:text-white hover:bg-dark-800'
-              }`
-            }
-          >
-            {label}
-          </NavLink>
-        ))}
-      </nav>
-    </header>
-  );
+    return (
+        <header className="bg-panel border-b border-border-subtle px-4 py-2 flex items-center gap-6 shrink-0">
+            <img
+                src="/logo.png"
+                alt="MindSet Data"
+                className="h-7 w-auto shrink-0"
+            />
+            <nav className="flex gap-0.5">
+                {TABS.map(({ to, label, Icon }) => (
+                    <NavLink
+                        key={to}
+                        to={to}
+                        className={({ isActive }) =>
+                            `inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded text-13 transition-colors ${
+                                isActive
+                                    ? 'bg-elevated text-text-primary'
+                                    : 'text-text-tertiary hover:text-text-primary hover:bg-panel-alt'
+                            }`
+                        }
+                    >
+                        <Icon size={14} strokeWidth={1.5} />
+                        <span>{label}</span>
+                    </NavLink>
+                ))}
+            </nav>
+        </header>
+    );
 }

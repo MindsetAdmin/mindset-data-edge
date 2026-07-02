@@ -40,7 +40,7 @@ export default function PipelinesPage() {
       const res = await runPipeline(id);
       const ok = res.status === 'success';
       const okCount = (res.nodes || []).filter((n) => n.status === 'success').length;
-      setRunStatus({ id, type: ok ? 'ok' : 'error', msg: `${res.status} — ${okCount}/${(res.nodes || []).length} nœuds OK` });
+      setRunStatus({ id, type: ok ? 'ok' : 'error', msg: `${res.status} ${okCount}/${(res.nodes || []).length} nœuds OK` });
     } catch (e) {
       setRunStatus({ id, type: 'error', msg: e.message });
     }
@@ -52,9 +52,9 @@ export default function PipelinesPage() {
         <span className="text-xl">🔧</span>
         <div className="min-w-0 flex-1">
           <div className="font-medium text-white">{p.name}</div>
-          <div className="text-xs text-dark-400">{p.description || '—'}</div>
+          <div className="text-xs text-dark-400">{p.description}</div>
           <div className="text-[11px] text-dark-500 mt-0.5 font-mono">
-            {(p.nodes || []).length} fonctions · trigger: {p.trigger?.function || '—'}
+            {(p.nodes || []).length} fonctions · trigger: {p.trigger?.function}
           </div>
         </div>
         <button onClick={() => handleLoad(p)} className="bg-blue-600 hover:bg-blue-500 text-white text-sm px-3 py-1.5 rounded-md transition">

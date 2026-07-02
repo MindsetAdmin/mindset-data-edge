@@ -31,6 +31,12 @@ type OpcUAConfig struct {
 	Endpoint       string `yaml:"endpoint"`
 	SecurityMode   string `yaml:"security_mode"`
 	SecurityPolicy string `yaml:"security_policy"`
+	Username       string `yaml:"username"`
+	// SessionTimeoutSec defaults to 60 when unset.
+	SessionTimeoutSec int `yaml:"session_timeout_seconds"`
+	// AutoConnect controls whether the edge agent opens the OPC-UA session on boot.
+	// Defaults to false so the connection is driven from the frontend (cmd/server).
+	AutoConnect bool `yaml:"auto_connect"`
 }
 
 type DiscoveryConfig struct {

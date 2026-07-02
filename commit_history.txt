@@ -1,0 +1,25 @@
+fa41476 docs: reflect interactive widgets, logo, WebSocket hardening
+2640010 feat: interactive dashboard widgets + MindSet Data logo
+6cd60c7 docs: update ARCHITECTURE + recreate COMPONENTS for all current features
+35da4f3 fix: restore dashboard pins snapshot (add_to_dashboard appears immediately)
+9d2bcf3 feat: cost sources + CSV/Excel rates, output sinks, KG tag grouping, remove Pareto
+6e439a3 feat: guided pipeline builder (config panels, validation, duplicates, OPC-UA tags)
+0802f38 feat: add_to_dashboard output function + pinned widgets panel
+e70037e feat: keep predefined pipelines as loadable templates (not deleted)
+19c5a8d feat: technical KG reflects only user-built pipelines
+4806b04 feat: live tag-data panel on the dashboard
+8b13e38 feat: real-time dashboard over WebSocket
+6c20e96 feat: real-time operational dashboard
+663466e feat: real-data bridge — live machines, topics, status & config
+626d170 feat: surface live OPC-UA tags + trim UI per feedback
+cfc02e0 feat: live OPC-UA tag bridge for the opcua_read trigger
+43779a3 chore: add run.ps1 one-command launcher
+040720a feat: fold in demo update notes (auto-KG, pickers, charts, zones)
+670c815 refactor: remove embedded HTTP dashboard from cmd/agent
+740cd23 feat: Pipeline Studio web UI + standalone API server + execution
+a693cd0 feat: complete architecture - Edge Agent + Pipeline + KG
+a04baf7 feat: docs updated
+94e11f8 Removed the last line of code in main.go
+272cd1c Feat: OPC-UA node tree brows working
+1d61203 docs: add project documentation
+33ad115 Initial commit

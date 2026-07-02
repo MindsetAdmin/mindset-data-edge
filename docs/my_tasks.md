@@ -1,0 +1,10 @@
+- why maestrohub fixe this pricing and how do we fixe the pricing
+- posts in Twitter
+- know what MCP and IA 
+- Hybrid (defalut) -> what will we gain from it if we convaicre the client to use hybrid
+- exemple of cecilia mail +whatsapp
+- ERP connectors
+- read thomas doc
+- my legal situation
+- cost_function ceci
+- Entry 20

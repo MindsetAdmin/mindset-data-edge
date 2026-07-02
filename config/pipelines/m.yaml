@@ -1,0 +1,36 @@
+id: m
+name: moh
+description: ""
+version: "1.0"
+enabled: true
+properties: {}
+trigger:
+    type: opcua
+    function: opcua_read
+    config:
+        machine: machine1
+        node_id: ns=3;i=1011
+        tags:
+            - ns=3;i=1011
+            - ns=3;i=1014
+        timeout: 5000
+nodes:
+    - id: uns_mapper_2ykyv
+      name: uns_mapper
+      type: transform
+      function: uns_mapper
+      config:
+        area: area1
+        site_id: sita-1
+      depends_on:
+        - trigger
+    - id: mqtt_publish_3a4pd
+      name: mqtt_publish
+      type: output
+      function: mqtt_publish
+      config:
+        qos: 1
+        topic: mindset/dashboard/temp
+      depends_on:
+        - uns_mapper_2ykyv
+output: mqtt_publish_3a4pd

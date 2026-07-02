@@ -196,6 +196,12 @@ satisfied). Built‑ins:
 | `GET /api/machines` | tags grouped by work center + live Running/Stopped state |
 | `GET /api/topics` | live topics + msg/s + category + broker_connected |
 | `GET /api/config` | safe subset of `agent.yaml` |
+| `POST /api/opcua/connect` | connect to a user‑specified OPC‑UA server (endpoint/security/auth/timeout) |
+| `GET /api/opcua/discover` | browse the connected server's node tree |
+| `POST /api/opcua/subscribe` | monitor selected tags with per‑tag mode (`raw`\|`isa95`\|`both`) |
+| `POST /api/opcua/disconnect` | close the OPC‑UA session |
+| `GET /api/opcua/status` | connection status (status/endpoint/tag_count/error) |
+| `GET /api/opcua/selections` | current per‑tag routing + ISA‑95 mapping (builder governance) |
 | `GET /api/dashboard/pins` | current dashboard pins (from `add_to_dashboard`) |
 | `GET /api/kg/technical` | technical (architecture) graph |
 | `GET /api/kg/domain` | domain (data) graph |
@@ -403,6 +409,14 @@ still runs; live values/rates/state are limited and persisted tags are shown.
 16. **Interactive dashboard widgets** (`DashboardWidgets`) — add from data sources,
     chart type (line/bar/gauge/value/status), time range, live stats, localStorage.
 17. **MindSet Data logo** in the NavBar; **WebSocket write‑deadline** hardening.
+18. **Dynamic, user‑controlled OPC‑UA** — the API server owns the OPC‑UA session
+    (`cmd/server/opcua.go`, `OPCUAManager`); the UI connects, browses and selects
+    tags with per‑tag **Raw / ISA‑95 / Both** routing via `/api/opcua/*`. Raw is
+    published to `mindset/raw/#` (storage); ISA‑95/Both are also mapped and
+    published to `mindset/site/#` (functions). The agent no longer auto‑connects
+    (`opcua.auto_connect=false`); it keeps running rules + KG and consumes the
+    server‑published `site/#`. Builder function pickers are restricted to
+    ISA‑95/Both work centers (`/api/opcua/selections`).
 
 ## 11. Notes & limitations
 - **TRS** on the dashboard is an *availability proxy* (downtime vs an 8h shift);
@@ -414,6 +428,10 @@ still runs; live values/rates/state are limited and persisted tags are shown.
 - The dashboard is **WebSocket‑driven** with a **20s polling fallback**.
 - Pipeline **Run** executes on demand via the server; the agent's live data flow
   (raw→UNS→events) runs independently in `cmd/agent`.
+- **Dynamic OPC‑UA** owns one session at a time; re‑applying selections stacks a new
+  subscription, so changing the selection currently means reconnecting. Secure modes
+  (`Sign`/`SignAndEncrypt`) need a client certificate (not yet wired) — use `None`.
+  The session idle‑timeout defaults to **300s** so the browse→select gap can't drop it.
 
 
 
@@ -421,31 +439,3 @@ still runs; live values/rates/state are limited and persisted tags are shown.
 
 
 
-
-
-
-
-HTTP polling, not WebSocket/SSE.
-
-How "real-time" actually works here
-There are two different links, and only the backend↔broker one is true push:
-
-1. Frontend ↔ API Server = REST over HTTP (polling)
-
-All UI data goes through fetch() calls in src/api/client.js, proxied by Vite (/api → :8080).
-The Dashboard creates the "live" feel by polling every 5 seconds:
-// DashboardPage.jsx
-const REFRESH_MS = 5000;
-timer.current = setInterval(refresh, REFRESH_MS);
-The builder pickers refresh on demand (e.g. tags/machines reload each time you select a node).
-No WebSocket, no SSE between browser and server.
-2. API Server ↔ MQTT Broker = real push (MQTT subscriptions)
-
-This is where the genuine real-time is. The server subscribes to the broker and keeps in-memory state fresh:
-LiveHub (cmd/server/live.go) subscribes to mindset/# → updates TagRegistry, TopicRegistry (rates), StateTracker.
-KGSubscriber subscribes to mindset/events/micro-stop → auto-enriches the KG.
-So the pattern is:
-Agent ──MQTT push──► Broker ──MQTT push──► Server (in-memory live state)
-                                              ▲
-                              Browser ──HTTP poll every 5s──┘
-The server is updated in real time by MQTT; the browser samples that state every 5s via REST. So end-to-end latency is "broker push + up to 5s polling delay."

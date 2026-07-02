@@ -1,14 +1,24 @@
-/* Scrollbar personnalisée (Tailwind est chargé via index.css) */
+/* MindSet 2026-07-01 redesign: precise, subtle scrollbar matching the new tokens */
 ::-webkit-scrollbar {
-    width: 6px;
+    width: 8px;
+    height: 8px;
 }
 ::-webkit-scrollbar-track {
-    background: #1e293b;
+    background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-    background: #475569;
-    border-radius: 3px;
+    background: #2A2A31; /* border-subtle */
+    border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-    background: #64748b;
+    background: #3A3A44; /* border-strong */
+}
+::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
+/* Firefox scrollbar */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: #2A2A31 transparent;
 }

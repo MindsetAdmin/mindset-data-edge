@@ -69,8 +69,11 @@ func main() {
 	// ── STEP 0.5: UNS Contextualizer ────────────────────────────────────
 	fmt.Println("\n[UNS] Initializing data contextualizer...")
 
+	// In UI-controlled mode (opcua.auto_connect=false) the API server owns the
+	// OPC-UA session and does the ISA-95 normalization, so the agent must NOT also
+	// run a contextualizer — otherwise mindset/site/# would be published twice.
 	var contextualizer *uns.Contextualizer = nil
-	if mqttPub != nil {
+	if mqttPub != nil && cfg.OpcUA.AutoConnect {
 		mapper := uns.NewMapper(cfg.Site.ID)
 		contextualizer, err = uns.NewContextualizer("tcp://localhost:1883", cfg.Site.ID, mapper)
 		if err != nil {
@@ -219,6 +222,20 @@ func main() {
 	// HTTP is owned by cmd/server (the standalone API the web UI talks to).
 	// The agent is purely the edge runtime; run `go run ./cmd/server` for the UI.
 
+	// ── UI-controlled mode gate ─────────────────────────────────────────
+	// When opcua.auto_connect is false (the default), the OPC-UA connection,
+	// discovery and subscription are driven from the web UI via cmd/server. The
+	// agent stays alive as the edge runtime (MQTT, rules engine, KG enrichment)
+	// but does NOT auto-connect to OPC-UA. Deferred cleanups still run on return.
+	if !cfg.OpcUA.AutoConnect {
+		log.Printf("[DISCOVERY] OPC-UA auto-connect disabled (opcua.auto_connect=false)")
+		log.Printf("[DISCOVERY] Connection is driven from the web UI (cmd/server). Rules + KG keep running.")
+		fmt.Println("\n[AGENT] Running in UI-controlled mode. Press Ctrl+C to stop.")
+		<-ctx.Done()
+		fmt.Println("\n[AGENT] Stopped by user.")
+		return
+	}
+
 	// ── STEP 1: OPC-UA Discovery ────────────────────────────────────────
 	fmt.Println("\n[DISCOVERY] Starting OPC-UA auto-discovery...")
 	fmt.Printf("[DISCOVERY] Connecting to: %s\n\n", cfg.OpcUA.Endpoint)
@@ -226,7 +243,12 @@ func main() {
 	opcua := discovery.NewOPCUADiscovery(cfg.OpcUA.Endpoint, mqttPub)
 
 	if err := opcua.Connect(ctx); err != nil {
-		log.Fatalf("[DISCOVERY] Connection failed: %v\n\nMake sure Prosys OPC-UA Simulator is running!", err)
+		log.Printf("[DISCOVERY] ⚠️ Connection failed: %v", err)
+		log.Printf("[DISCOVERY] Make sure the OPC-UA server is running. Agent will idle (rules + KG keep running).")
+		fmt.Println("\n[AGENT] Running (OPC-UA unavailable). Press Ctrl+C to stop.")
+		<-ctx.Done()
+		fmt.Println("\n[AGENT] Stopped by user.")
+		return
 	}
 	defer opcua.Disconnect(ctx)
 
@@ -234,7 +256,11 @@ func main() {
 	fmt.Println("\n[DISCOVERY] Browsing node tree...\n")
 	tags, err := opcua.BrowseNodeTree(ctx)
 	if err != nil {
-		log.Fatalf("[DISCOVERY] Browse failed: %v", err)
+		log.Printf("[DISCOVERY] ⚠️ Browse failed: %v", err)
+		fmt.Println("\n[AGENT] Running (browse failed). Press Ctrl+C to stop.")
+		<-ctx.Done()
+		fmt.Println("\n[AGENT] Stopped by user.")
+		return
 	}
 
 	fmt.Printf("\n[DISCOVERY] ✅ Found %d tags total\n", len(tags))

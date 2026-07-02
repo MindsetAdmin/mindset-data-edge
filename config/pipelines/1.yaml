@@ -1,0 +1,23 @@
+id: "1"
+name: "145"
+description: ""
+version: "1.0"
+enabled: true
+properties: {}
+trigger:
+    type: opcua
+    function: opcua_read
+    config:
+        node_id: ns=3;i=1001
+        timeout: 5000
+nodes:
+    - id: add_to_dashboard_0iqso
+      name: add_to_dashboard
+      type: output
+      function: add_to_dashboard
+      config:
+        kind: value
+        label: Mon widget
+      depends_on:
+        - trigger
+output: add_to_dashboard_0iqso

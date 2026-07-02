@@ -29,7 +29,13 @@ export default function ConnectPage() {
 
   const handleSelect = (c) => {
     selectConnector(c);
-    navigate('/compose');
+    // OPC-UA gets the dynamic connect/discover/select flow; others go straight
+    // to Compose where the connector is applied to the trigger.
+    if (c.name === 'opcua_read') {
+      navigate('/connect/opcua');
+    } else {
+      navigate('/compose');
+    }
   };
 
   return (
@@ -43,7 +49,7 @@ export default function ConnectPage() {
         {loading && <p className="text-dark-400 text-sm">Chargement…</p>}
         {error && (
           <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-3 text-red-400 text-sm">
-            ❌ {error} — le serveur API tourne-t-il sur :8080 ?
+            ❌ {error}  le serveur API tourne-t-il sur :8080 ?
           </div>
         )}
 
@@ -60,7 +66,7 @@ export default function ConnectPage() {
                     {triggerTypeFor(c.name)}
                   </span>
                 </div>
-                <p className="text-sm text-dark-400 mb-3">{c.description || '—'}</p>
+                <p className="text-sm text-dark-400 mb-3">{c.description}</p>
 
                 <div className="text-[11px] text-dark-500 uppercase tracking-wider mb-1">Config par défaut</div>
                 {fields.length === 0 ? (
@@ -80,7 +86,7 @@ export default function ConnectPage() {
                   onClick={() => handleSelect(c)}
                   className="mt-auto bg-blue-600 hover:bg-blue-500 text-white text-sm px-3 py-1.5 rounded-md transition"
                 >
-                  Sélectionner →
+                  {c.name === 'opcua_read' ? 'Configurer la connexion →' : 'Sélectionner →'}
                 </button>
               </div>
             );

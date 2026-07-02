@@ -20,6 +20,8 @@ features. For the high‑level design and data flow, see [ARCHITECTURE.md](ARCHI
 | `tags.go` | **`TagRegistry`** — latest value per OPC‑UA tag (from `mindset/raw/#`), persisted to the SQLite `tags` table. Backs `GET /api/tags`. |
 | `live.go` | **`LiveHub`** — one `mindset/#` subscription. Feeds `TagRegistry`, `TopicRegistry` (msg/s rates + category), `StateTracker` (Running/Stopped + transition history), and keeps the latest **dashboard pin** per label. Broadcasts `tag`/`state`/`event`/`dashboard` over WebSocket. |
 | `ws.go` | **`wsHub`** — upgrades `/api/ws`, tracks clients, `broadcast(type,data)` fans out JSON to all (concurrency‑safe, with a per‑client **write deadline** so one slow/dead client can't stall the feed). |
+| `opcua.go` | **`OPCUAManager`** — the dynamic, frontend‑driven OPC‑UA session. `Connect/Discover/Subscribe/Disconnect/Status/Selections`. Publishes raw for every selected tag and ISA‑95 (`mindset/site/#`) for `isa95`/`both` via `route`. Owns one session; uses `internal/mqtt.Publisher` + `internal/uns.Mapper`. |
+| `opcua_handlers.go` | HTTP handlers for `/api/opcua/{connect,discover,subscribe,disconnect,status,selections}` + `writeJSONStatus`. |
 
 ---
 
@@ -28,12 +30,12 @@ features. For the high‑level design and data flow, see [ARCHITECTURE.md](ARCHI
 ### `config/`
 | File | What it does |
 |---|---|
-| `config.go` | Loads `config/agent.yaml`: `Site`, `OpcUA`, `Discovery`, `Mqtt`, `Cloud`, `Cost`. |
+| `config.go` | Loads `config/agent.yaml`: `Site`, `OpcUA`, `Discovery`, `Mqtt`, `Cloud`, `Cost`. `OpcUA` now also has `Username`, `SessionTimeoutSec`, `AutoConnect` (default false → UI‑controlled OPC‑UA). |
 
 ### `discovery/` — OPC‑UA
 | File | What it does |
 |---|---|
-| `opcua.go` | Connect, `BrowseNodeTree` (discover tags + types), `Subscribe` (publish each value change to `mindset/raw/<nodeID>`), `WatchForChanges`. |
+| `opcua.go` | Connect, `BrowseNodeTree` (discover tags + types), `Subscribe` (publish each value change to `mindset/raw/<nodeID>`), `WatchForChanges`. Connection is parameterized via `ConnectionConfig` (endpoint/security/auth/timeout) with `NewOPCUADiscoveryWithConfig`; the legacy `NewOPCUADiscovery` keeps the agent's call site working. |
 
 ### `mqtt/`
 | File | What it does |
@@ -111,13 +113,13 @@ features. For the high‑level design and data flow, see [ARCHITECTURE.md](ARCHI
 | `public/logo.png` | The MindSet Data logo, served at `/logo.png` (used in the NavBar). |
 | `vite.config.js` | Dev `:5173`; proxy `/api` → `:8080` with `ws:true` (REST + WebSocket). |
 | `src/main.jsx` | React entry; `BrowserRouter`. |
-| `src/App.jsx` | Router shell (NavBar + 6 routes inside `ErrorBoundary`). |
+| `src/App.jsx` | Router shell (NavBar + 7 routes inside `ErrorBoundary`, incl. `/connect/opcua`). |
 
 ### API & state
 | File | What it does |
 |---|---|
-| `src/api/client.js` | All REST calls (functions, connectors, pipelines + examples + run, tags, machines, topics, config, **dashboard pins**, stats, KG). |
-| `src/store/studioStore.js` | Zustand: cross‑page intents (Connect→Compose connector; Pipelines→Compose full pipeline object). |
+| `src/api/client.js` | All REST calls (functions, connectors, pipelines + examples + run, tags, machines, topics, config, **dashboard pins**, stats, KG, **OPC‑UA** connect/discover/subscribe/disconnect/status/selections). |
+| `src/store/studioStore.js` | Zustand: cross‑page intents (Connect→Compose connector; Pipelines→Compose full pipeline object) + `opcuaSelections` (applied OPC‑UA tag routing). |
 | `src/lib/useLiveSocket.js` | WebSocket hook (`/api/ws`, auto‑reconnect). |
 
 ### Libraries (`src/lib/`)
@@ -141,6 +143,8 @@ features. For the high‑level design and data flow, see [ARCHITECTURE.md](ARCHI
 | `CytoscapeGraph.jsx` | React wrapper around Cytoscape. |
 | `ErrorBoundary.jsx` | Catches render errors. |
 | `LiveDataPanel.jsx` | Pick tag(s) → live multi‑line chart over WebSocket. |
+| `OpcuaConnectionPanel.jsx` | OPC‑UA connection form (endpoint, security mode/policy, optional user/pass, session timeout) + status badge; connect doubles as test; prefilled from `/api/config`. |
+| `OpcuaTagSelector.jsx` | Discovered‑tag table (filter by name/type), per‑row **Raw/ISA‑95/Both**, bulk select, **Apply** → `/api/opcua/subscribe`. |
 | `DashboardWidgets.jsx` | **Interactive widgets** for `add_to_dashboard` data: add from available sources, pick chart type (line/bar/gauge/value/status) + time range (1m–24h), live stats (Last/Min/Max/Avg/Count), `✕`/`⚙️` controls, persisted in **localStorage**. Parses values (never raw JSON). |
 | `nodes/PipelineNode.jsx` | Pipeline‑step node; **outputs are input‑only sinks** (no output port). |
 | `nodes/TriggerNode.jsx` | The entry/trigger node. |
@@ -150,7 +154,8 @@ features. For the high‑level design and data flow, see [ARCHITECTURE.md](ARCHI
 | File | Route | What it does |
 |---|---|---|
 | `OverviewPage.jsx` | `/overview` | Landing: stats + quick links. |
-| `ConnectPage.jsx` | `/connect` | Connector catalog; select → applies to trigger. |
+| `ConnectPage.jsx` | `/connect` | Connector catalog; select → applies to trigger (OPC‑UA → `/connect/opcua`). |
+| `OpcuaConnectPage.jsx` | `/connect/opcua` | Dynamic OPC‑UA flow: connect → discover → choose per‑tag Raw/ISA‑95/Both → apply → Compose. |
 | `BuilderPage.jsx` | `/compose` | Drag‑and‑drop builder; guided config; **smart validation + duplicate modal**; Save/Run/delete. |
 | `PipelinesPage.jsx` | `/pipelines` | "Mes pipelines" (run/load) + "Modèles (exemples)" (load). |
 | `DashboardPage.jsx` | `/dashboards` | Real‑time dashboard (WebSocket + 20s fallback): KPIs, pinned widgets, live tag chart, recent events, machine status, Gantt. |

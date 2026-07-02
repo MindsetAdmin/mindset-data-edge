@@ -4,6 +4,7 @@ import { buildEvents, effectiveCost, splitDays, deltaPct } from '../lib/dashboar
 import { useLiveSocket } from '../lib/useLiveSocket';
 import LiveDataPanel from '../components/LiveDataPanel';
 import DashboardWidgets from '../components/DashboardWidgets';
+import { useStudioStore } from '../store/studioStore';
 
 const FALLBACK_MS = 20000; // safety heartbeat; real-time comes from the WebSocket
 
@@ -73,12 +74,18 @@ export default function DashboardPage() {
 
   const brokerConnected = stats?.broker_connected;
 
+  // Show only machines wired into a state_machine node in the current session's pipeline.
+  const selectedMachines = useStudioStore((s) => s.selectedMachines);
+  const filteredMachines = machines
+    .filter((m) => m.work_center !== '(autres)')
+    .filter((m) => !selectedMachines.length || selectedMachines.includes(m.work_center));
+
   return (
     <div className="h-full overflow-y-auto p-5">
       <div className="max-w-6xl mx-auto space-y-5">
         {/* Header */}
         <div className="bg-dark-900 border border-dark-700 rounded-lg px-4 py-3 flex flex-wrap items-center gap-x-8 gap-y-1 text-sm">
-          <span className="font-semibold text-white">📊 MindSet Data Dashboard</span>
+          
           <span className="text-dark-400">Site : <span className="text-dark-200">{config?.site?.name || config?.site?.id || '—'}</span></span>
           <span className="text-dark-400">
             Statut : <span className={brokerConnected ? 'text-green-400' : 'text-red-400'}>{brokerConnected ? '🟢 Connecté' : '🔴 Déconnecté'}</span>
@@ -134,15 +141,15 @@ export default function DashboardPage() {
           </Panel>
 
           <Panel title="🏭 Statut machines">
-            {machines.filter((m) => m.work_center !== '(autres)').length === 0 ? (
-              <Empty text="Aucune machine découverte." />
+            {filteredMachines.length === 0 ? (
+              <Empty text={selectedMachines.length === 0
+                ? "Configurez une machine dans un pipeline (onglet Compose) pour la voir ici."
+                : "Aucune machine sélectionnée active."} />
             ) : (
               <div className="divide-y divide-dark-800">
-                {machines
-                  .filter((m) => m.work_center !== '(autres)')
-                  .map((m) => {
+                {filteredMachines.map((m) => {
                     const running = m.state?.running;
-                    const temp = tagValue(m.tags, 'temperature');
+                    const temp = tagValue(m.tags);
                     return (
                       <div key={m.work_center} className="py-2 flex items-center gap-3 text-sm">
                         <span className="text-white w-28 truncate">{m.work_center}</span>
@@ -162,7 +169,7 @@ export default function DashboardPage() {
 
         {/* Gantt */}
         <Panel title="📊 Timeline machines">
-          <Gantt machines={machines.filter((m) => m.work_center !== '(autres)')} />
+          <Gantt machines={filteredMachines} />
         </Panel>
       </div>
     </div>

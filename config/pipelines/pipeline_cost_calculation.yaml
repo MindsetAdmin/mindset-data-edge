@@ -1,0 +1,33 @@
+id: pipeline_cost_calculation
+name: Cost Calculation
+description: Calcule le coût des micro-stops en euros
+version: "1.0"
+enabled: true
+properties: {}
+trigger:
+    type: mqtt
+    function: mqtt_subscribe
+    config:
+        qos: 1
+        topic: mindset/events/status-change
+nodes:
+    - id: cost
+      name: Cost
+      type: calculate
+      function: calculate_cost
+      config:
+        currency: EUR
+        hourly_rate: 85
+        rate_source: tag
+      depends_on:
+        - trigger
+    - id: mqtt_publish
+      name: Publish Cost
+      type: output
+      function: mqtt_publish
+      config:
+        qos: 1
+        topic: mindset/events/micro-stop
+      depends_on:
+        - cost
+output: mqtt_publish

@@ -5,6 +5,7 @@ import (
     "context"
     "fmt"
     "log"
+    "strings"
     "time"
 
     "github.com/gopcua/opcua"
@@ -26,32 +27,96 @@ type TagChange struct {
     Removed []Tag
 }
 
+// ConnectionConfig holds everything needed to open an OPC-UA session. It lets the
+// caller (e.g. the dynamic, frontend-driven flow in cmd/server) override what used
+// to be hardcoded here. Empty fields fall back to safe defaults (None security,
+// anonymous auth, 60s session timeout).
+type ConnectionConfig struct {
+    Endpoint          string
+    SecurityMode      string // "None" | "Sign" | "SignAndEncrypt"
+    SecurityPolicy    string // "None" | "Basic256Sha256" | "Basic256" | "Basic128Rsa15"
+    Username          string
+    Password          string
+    SessionTimeoutSec int // default 60
+}
+
 // OPCUADiscovery handles OPC-UA connection and node tree browsing
 type OPCUADiscovery struct {
     endpoint string
+    connCfg  ConnectionConfig
     client   *opcua.Client
     mqttPub   *mqtt.Publisher
 }
 
-// NewOPCUADiscovery creates a new OPC-UA discovery instance
+// NewOPCUADiscovery creates a discovery instance with the legacy defaults
+// (no security, anonymous). Kept so cmd/agent's existing call site is untouched.
 func NewOPCUADiscovery(endpoint string, mqttPub *mqtt.Publisher) *OPCUADiscovery {
+    return NewOPCUADiscoveryWithConfig(ConnectionConfig{
+        Endpoint:       endpoint,
+        SecurityMode:   "None",
+        SecurityPolicy: "None",
+    }, mqttPub)
+}
+
+// NewOPCUADiscoveryWithConfig creates a discovery instance from a full
+// ConnectionConfig, applying defaults for any empty field.
+func NewOPCUADiscoveryWithConfig(cfg ConnectionConfig, mqttPub *mqtt.Publisher) *OPCUADiscovery {
+    if cfg.SecurityMode == "" {
+        cfg.SecurityMode = "None"
+    }
+    if cfg.SecurityPolicy == "" {
+        cfg.SecurityPolicy = "None"
+    }
+    if cfg.SessionTimeoutSec <= 0 {
+        cfg.SessionTimeoutSec = 300
+    }
     return &OPCUADiscovery{
-        endpoint: endpoint,
+        endpoint: cfg.Endpoint,
+        connCfg:  cfg,
         mqttPub:  mqttPub,
     }
 }
 
-// Connect establishes connection to the OPC-UA server
+// parseSecurityMode maps the config string onto the gopcua enum.
+func parseSecurityMode(s string) ua.MessageSecurityMode {
+    switch strings.ToLower(strings.TrimSpace(s)) {
+    case "sign":
+        return ua.MessageSecurityModeSign
+    case "signandencrypt", "sign_and_encrypt", "sign-and-encrypt":
+        return ua.MessageSecurityModeSignAndEncrypt
+    default:
+        return ua.MessageSecurityModeNone
+    }
+}
+
+// Connect establishes connection to the OPC-UA server using the ConnectionConfig.
 func (d *OPCUADiscovery) Connect(ctx context.Context) error {
-    log.Printf("[OPC-UA] Connecting to %s", d.endpoint)
+    secMode := parseSecurityMode(d.connCfg.SecurityMode)
+    secPolicy := d.connCfg.SecurityPolicy
+    if secPolicy == "" {
+        secPolicy = "None"
+    }
+    log.Printf("[OPC-UA] Connecting to %s (security=%s/%s)", d.endpoint, d.connCfg.SecurityMode, secPolicy)
+
+    // Sign / SignAndEncrypt require a client certificate + key pair, which isn't
+    // wired yet. Fail fast with a clear message rather than a cryptic handshake error.
+    if secMode != ua.MessageSecurityModeNone {
+        return fmt.Errorf("security mode %q requires a client certificate, which is not yet configured — use \"None\" for now", d.connCfg.SecurityMode)
+    }
 
     opts := []opcua.Option{
-        opcua.SecurityMode(ua.MessageSecurityModeNone),
-        opcua.SecurityPolicy("None"), // Explicitly set policy
-        opcua.AuthAnonymous(),                                // Explicitly set auth
-        opcua.ApplicationName("MindsetData-Test"),
+        opcua.SecurityMode(secMode),
+        opcua.SecurityPolicy(secPolicy),
+        opcua.ApplicationName("MindsetData"),
         opcua.RequestTimeout(30 * time.Second),
-        opcua.SessionTimeout(120 * time.Second),
+        opcua.SessionTimeout(time.Duration(d.connCfg.SessionTimeoutSec) * time.Second),
+    }
+
+    // Username/password auth when provided, otherwise anonymous.
+    if d.connCfg.Username != "" {
+        opts = append(opts, opcua.AuthUsername(d.connCfg.Username, d.connCfg.Password))
+    } else {
+        opts = append(opts, opcua.AuthAnonymous())
     }
 
     client, err := opcua.NewClient(d.endpoint, opts...)
@@ -406,8 +471,7 @@ func (d *OPCUADiscovery) Subscribe(
         Interval: interval,
     }, notifyCh)
     if err != nil {
-        fmt.Errorf("failed to create subscription 111: %w", err)
-        return err
+        return fmt.Errorf("failed to create subscription: %w", err)
     }
 
     // Create monitored items for each tag

@@ -2,6 +2,11 @@
 
 > **Vision:** Connect every machine, system, and data flow in a factory to a single reliable and exploitable source of truth — the Unified Namespace (UNS) — to transform every signal into a business decision.
 
+> **Document status:** Vision narrative — updated 2026-06-28.
+> **Canonical decision log:** `docs/decisions.md` (25 locked decisions as of 2026-06-28). If this doc conflicts with `decisions.md`, **decisions.md wins**.
+> **Competitive analysis:** `docs/MindSet_Competitive_Analysis_v2_2.xlsx` (9 sheets).
+> **Audit trail:** `docs/analysis_log.md` (running session log, Entries 1-16).
+
 ---
 
 ## Table of Contents
@@ -54,6 +59,8 @@ Unreconciled data slows decisions and silently destroys margin.
 
 Mindset Data is the **unified, reliable, real-time data infrastructure layer** that connects all factory sources (machines, ERP, MES, energy meters) to a UNS that contextualizes every signal into financial impact — without replacing existing systems, without additional hardware, without a heavy IT project.
 
+**Target market**: 15,000+ European mid-sized factories. **Initial GTM focus on 4 high-value verticals** — pharma 💊 · cosmetics 💄 · agrifood 🌾 · metallurgy ⚙️ — where downtime cost is highest, regulation is strictest, and the EU-sovereignty pitch lands hardest. See §3 for vertical detail.
+
 ### The four-step flow
 
 ```
@@ -78,6 +85,29 @@ Zero dev client   Enriched ongoing   ROI simulated     Loop closed
 ---
 
 ## 3. Client Segmentation
+
+### 3.0 Target market + initial verticals (V1 GTM focus)
+
+**TAM**: 15,000+ European mid-sized factories.
+
+**Initial GTM focus — 4 high-value verticals**:
+
+| Vertical | Why it fits MindSet | Sales motion | Indicative deal size |
+|---|---|---|---|
+| 💊 **Pharma** | GMP / FDA / EMA regulated → sovereignty pitch lands hard · ~50k€/h downtime cost · mature OEE culture · willingness to pay | Enterprise IT-led, 6-12 month cycle, RFP, ISO 27001 + GAMP 5 required | 50-150k€ / site / year |
+| 💄 **Cosmetics** | EU Cosmetic Regulation = procurement-sensitive · high-margin products · brand-reputation-sensitive (no public IT incidents) · often part of large groups (LVMH, L'Oréal, Estée Lauder) | Enterprise IT-led, similar to pharma | 50-100k€ / site / year |
+| 🌾 **Agrifood** | Largest FR industrial vertical · high cost of waste + energy-intensive · strict EU/FR regulation (HACCP, traceability) · many independent mid-sized + family-owned | **Self-serve Plant-Manager <30k€** (the original ETI motion) | 15-30k€ / site / year |
+| ⚙️ **Metallurgy** | Capital-intensive · high downtime cost · complex OF/scheduling · energy-heavy (Level 2 energy waste demos perfectly) · mix of independent + grouped | Mixed — self-serve for independents, enterprise for grouped | 20-50k€ / site / year |
+
+**Geographic execution**: starts in **France** (founders' geography + Boost10x network), expands to **DACH + Italy + Spain + Nordics** in V2-V3.
+
+**Two parallel sales motions** (downstream of the vertical mix):
+- **Motion #1 — Self-serve Plant Manager** (agrifood + independent metallurgy): Docker pull, 48h deployment, <30k€/site, Plant Manager signs autonomously
+- **Motion #2 — Enterprise IT-led** (pharma + cosmetics + grouped metallurgy): RFP-driven, 6-12 month cycles, 50-150k€/site, requires ISO 27001 + GAMP 5 + RBAC + audit log
+
+The buyer personas below (IT/OT Manager, Operations Director, Plant Manager, CFO/CEO) apply across both motions — but the **decision authority** shifts: Plant Manager-led in Motion #1; CISO + IT Procurement + Plant Manager + Ops Director in Motion #2.
+
+---
 
 ### IT/OT Manager
 - **Pain:** Integration complexity and maintenance of factory data.
@@ -117,110 +147,144 @@ Zero dev client   Enriched ongoing   ROI simulated     Loop closed
 
 ## 4. Technical Architecture
 
-### 4.1 Global overview
+### 4.1 Three deployment editions
+
+The product ships in **exactly three editions**. No hyperscaler edition through 2029 (reconsidered for international scaling — see `decisions.md`).
+
+| Edition | Cloud component | Multi-site | Remote dashboard | Target customer |
+|---|---|---|---|---|
+| **On-Premise** | NONE — zero cloud | No (per-site only) | No (factory LAN only) | Defense, public sector, sensitive pharma |
+| **Hybrid** *(default)* | Scaleway FR / OVH FR (MindSet-managed) | Yes | Yes (`app.mindsetdata.io`) | Commercial ETI — the everyday offer |
+| **Self-Hosted** | Customer's EU-jurisdiction cloud (Hetzner, IONOS, T-Systems, 3DS Outscale, Bleu) OR customer's on-prem Kubernetes | Yes | Yes (customer-hosted) | Large multi-site with existing EU cloud relationship |
+
+**Explicitly NOT offered:** AWS, Azure, GCP — including their EU regions. The US CLOUD Act exposure invalidates the sovereignty pitch for public sector and defense customers.
+
+### 4.2 Global overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         CLIENT NETWORK (OT + IT)                    │
 │                                                                     │
 │  OT SOURCES                      IT SOURCES                        │
-│  ├── SCADA / PLC (OPC-UA)        ├── ERP (SQL / REST API)          │
-│  ├── Siemens PLC (S7)            ├── MES (SQL / REST API)          │
-│  ├── Legacy PLC (Modbus TCP)     ├── Production Orders / Recipes   │
-│  └── Energy meters (Modbus TCP)  └── Hourly costs / Margins        │
+│  ├── SCADA / PLC (OPC-UA)        ├── ERP (SQL: PostgreSQL/         │
+│  ├── Siemens PLC (S7, V1.5)      │    MSSQL/MySQL — V1)            │
+│  ├── Legacy PLC (Modbus TCP)     ├── ERP REST (V1.5)               │
+│  └── Energy meters (Modbus TCP)  └── Files / FTP (V1.5)            │
 │           │                               │                        │
 │           └───────────────┬───────────────┘                        │
 │                           ▼                                        │
 │              ┌────────────────────────┐                            │
 │              │     EDGE AGENT (Go)    │  ← Docker, client's PC     │
+│              │     1 binary           │  ← 8GB RAM min, 16GB rec   │
 │              │                        │                            │
 │              │  Discovery Layer       │                            │
 │              │  ├── Network scanner   │  ← Auto-detect endpoints   │
 │              │  ├── OPC-UA browse     │  ← Node tree extraction    │
 │              │  ├── Modbus scan       │  ← Register fingerprint    │
-│              │  └── S7 scan           │  ← DB scan                 │
+│              │  └── S7 scan (V1.5)    │                            │
 │              │                        │                            │
 │              │  Intelligence Layer    │                            │
 │              │  ├── Behavioral infer  │  ← Live pattern matching   │
-│              │  ├── SLM Phi-3 local   │  ← Tag classification      │
-│              │  ├── Local UNS ISA-95  │  ← In-memory routing       │
-│              │  └── Fuzzy Join        │  ← OT/IT reconciliation    │
+│              │  ├── SLM Phi-3 local   │  ← Tag classif. (Ollama)   │
+│              │  ├── UNS ISA-95 mapper │  ← Tag → Site/Area/WC/Tag  │
+│              │  └── OF-state Fuzzy J. │  ← OT events → active OF   │
+│              │                        │    (NOT sliding window)    │
 │              │                        │                            │
 │              │  Processing Layer      │                            │
-│              │  ├── Rules engine      │  ← Micro-stops detection   │
-│              │  ├── Energy rules      │  ← Waste detection         │
+│              │  ├── Rules engine      │  ← Templates: micro-stop,  │
+│              │  │                     │    energy waste, OEE/TRS   │
 │              │  └── Cost model (€)    │  ← Real-time € calculation │
+│              │                        │                            │
+│              │  AI Layer (V1)         │                            │
+│              │  ├── MCP server        │  ← localhost:5000          │
+│              │  └── Ad-hoc Analyst    │  ← Chat agent in dashboard │
 │              │                        │                            │
 │              │  Storage Layer         │                            │
 │              │  ├── SQLite 7-15 days  │  ← Local ring buffer       │
+│              │  ├── KG (domain+tech)  │  ← Site fingerprint        │
 │              │  └── Push → Historian  │  ← Client's own system     │
 │              │                        │                            │
 │              │  Serving Layer         │                            │
-│              │  ├── Local dashboard   │  ← localhost:3000          │
-│              │  ├── Local alerting    │  ← Direct SMTP/Slack       │
-│              │  └── Ollama / Phi-3    │  ← SLM fully local         │
+│              │  ├── Local dashboard   │  ← localhost:8080 (React)  │
+│              │  └── Local alerting    │  ← Direct SMTP/Slack/Teams │
 │              └───────────┬────────────┘                            │
-│                          │ HTTPS Push-only                         │
-│                          │ Aggregated snapshots only               │
-│                          │ (KG delta + TRS summary + alerts)       │
+│                          │ HTTPS Push-only (mTLS + TLS 1.3)        │
+│                          │ Transformed events + KG snapshots ONLY  │
+│                          │ Raw OT data NEVER leaves                │
 └──────────────────────────┼──────────────────────────────────────────┘
                            ▼
-              ┌────────────────────────┐
-              │    CLOUD (Scaleway FR) │  ← Minimal footprint
-              │                        │
-              │  ├── KG aggregation    │  ← Cross-site (V1+)
-              │  ├── Remote dashboard  │  ← CEO/CFO access
-              │  ├── Site management   │  ← API keys, auth
-              │  ├── Backup KG         │  ← Snapshots
-              │  └── Alerting relay    │  ← If local down
-              └────────────────────────┘
+              ┌────────────────────────────────┐
+              │ CLOUD TIER (Hybrid + Self-Hosted only — On-Premise has no cloud) │
+              │                                                                  │
+              │  ├── Cross-site KG aggregation    ← Multi-site only             │
+              │  ├── Remote dashboard             ← CEO/CFO/Ops outside factory │
+              │  ├── Site management API          ← Auth, API keys, licenses    │
+              │  ├── KG snapshot backup           ← Encrypted at edge first     │
+              │  └── Heartbeat monitor            ← Detect dead edge agent      │
+              │                                                                  │
+              │  Hybrid: Scaleway FR / OVH FR (MindSet-hosted, ~15€/mo)         │
+              │  Self-Hosted: customer's EU cloud or on-prem K8s                │
+              └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 4.2 Core principles
+### 4.3 Core principles
 
 | Principle | Implementation |
-|-----------|---------------|
-| Zero additional hardware | Edge Agent runs on existing client infrastructure (VM, industrial PC) |
-| Zero raw data in cloud | Only transformed events and aggregated snapshots go up |
-| Push-only | Outbound HTTPS only, zero inbound open ports |
+|---|---|
+| Zero additional hardware | Edge Agent runs on existing client infrastructure (PC, VM, industrial box) |
+| Zero raw data in cloud | Only transformed events + aggregated snapshots go up |
+| Push-only | Outbound HTTPS (mTLS + TLS 1.3) only — zero inbound open ports |
 | Read-only on source systems | Zero writes to PLC, SCADA, ERP |
-| Zero manual connection work | Network scan + behavioral inference + SLM classification |
-| Maximum local processing | Rules engine, cost model, Fuzzy Join, dashboard — all at the Edge |
-| Offline resilience | Full operation if cloud unreachable, queues sync on reconnect |
-| Cloud sovereignty | FR certified cloud (Scaleway/OVH) or BYOC |
+| Zero manual connection work | Network scan + behavioral inference + Phi-3 SLM classification |
+| Maximum local processing | Rules engine, cost model, OF-state Fuzzy Join, dashboard, MCP server, AI agent — all at the Edge |
+| Offline resilience | Full operation if cloud unreachable; queues sync on reconnect |
+| EU sovereignty | EU jurisdiction by design — no hyperscaler edition through 2029 |
+| Single-vendor, no middleware | No Kepware, no per-tag fees, native protocol drivers in Go |
 
-### 4.3 Storage strategy
+### 4.4 What runs WHERE — strict rule
+
+**A feature goes to the cloud tier ONLY IF all three hold:**
+1. It needs to span multiple sites OR be reachable from outside the factory.
+2. Latency tolerates >1s round-trip.
+3. Only already-transformed data crosses the boundary (raw OT values forbidden).
+
+Everything else runs at the edge.
+
+**The edge agent encapsulates ~63 components across 11 categories.** Full inventory in `docs/analysis_log.md` Entry 23 + Sheet 8 of `MindSet_Competitive_Analysis_v2_3.xlsx`. Compact summary:
+
+| Category | # | Examples | V1 ship |
+|---|---|---|---|
+| Storage | 6 | SQLite ring buffer · Domain KG (the moat dataset) · Technical KG · Tag/Topic registries · State tracker | All 6 |
+| Message bus | 1 | Local Mosquitto MQTT broker (bundled in docker-compose) | 1 |
+| Discovery + Classification | 5 | Network scanner · OPC-UA browse · Modbus fingerprint DB · Behavioral inference · UNS ISA-95 mapper | All 5 |
+| Connectors | 11 | OPC-UA, Modbus TCP, SQL multi-dialect (V1) · S7, REST, Files (V1.5) · MQTT, Sparkplug B, MTConnect, BACnet (V2+) | 3 |
+| Processing engines | 6 | Pipeline engine · Function registry · Rules engine · OF-state Fuzzy Join · Cost model · OEE/TRS calculator | All 6 |
+| KG integration | 3 | KG subscriber · KG builder · KG REST API | All 3 |
+| Local UI | 10 | React skeleton · Pipeline Studio · KG viewer · Dashboard + WebSocket hub · Gantt · Pareto · OEE view · ROI sim · Tribal knowledge capture · Onboarding wizard | All 10 |
+| AI layer | 4 | Phi-3 runtime · MCP server · Ad-hoc Analyst agent · Remote LLM proxy | All 4 |
+| Communication outbound | 5 | WebSocket hub · HTTPS cloud pusher · SMTP/Slack/Teams alerting · Heartbeat sender · Historian push | 4 |
+| Infrastructure | 6 | Config loader · Logger · Secrets management · License validator · Health endpoints · Auto-update | 5 |
+| Security (pending decision) | 6 | Encryption at rest · Signed binaries · SBOM · Audit log · RBAC · SSO | 4 V1 + 2 V1.5 |
+| **TOTAL EDGE** | **63** | | **~51** |
+
+**Components running IN THE CLOUD (Hybrid + Self-Hosted only — On-Premise edition has none):**
+Cross-site KG aggregator · multi-site dashboard · single-site remote dashboard · site management API (auth + keys + entitlements) · encrypted KG snapshot backup · heartbeat / liveness monitor.
+
+**Opt-in cloud (customer decision, with explicit disclosure):**
+Remote LLM proxy (OpenAI/Claude/Mistral) instead of local Phi-3 · cloud MCP relay for remote AI agents (V1.5+).
+
+**Why this matters for the pitch:** "1 Go binary + 1 React UI" is honest at 30,000ft view — but the binary actually encapsulates ~51 production-grade components at V1, all in one Docker container that installs in 48h. UMH ships ~10 OSS components requiring Kubernetes expertise. That's the deployment-simplicity moat.
+
+### 4.5 Storage strategy
 
 ```
-EDGE (local — rolling window)     CLIENT HISTORIAN          YOUR CLOUD
-─────────────────────────────     ─────────────────         ──────────
-SQLite ring buffer                PI System /               Aggregated
-7 to 15 days configurable         Wonderware /              KG snapshots
-                                  InfluxDB /                only
-Raw events + causes + costs €     MSSQL / TimescaleDB
-                                  (already exists)
-Auto-purge after TTL              Client owns their         You own the
-                                  long-term history         context layer
-Push enriched events              via your SQL/REST         No raw history
-to historian (V1)                 connector                 ever stored
-```
-
-### 4.4 Local UNS vs Cloud UNS
-
-```
-LOCAL UNS (Edge — volatile)              CLOUD UNS (Persistent)
-────────────────────────────             ───────────────────────────
-Lives in memory, rebuilt on restart      Lives in PostgreSQL, grows forever
-Current tag → UNS topic mapping          Full site fingerprint since day 1
-Used for: real-time routing,             Used for: KG API, remote dashboard,
-rules engine, cost calculation           AI agents (V2+), cross-site views
-Scope: present moment                    Scope: full history + context
-
-"ns=2;s=Line1.Motor.Speed"              "site/usine-nord/line1/motor/speed
-→ site/line1/motor/speed"                → Vitesse_Convoyeur
-→ apply micro-stop rule                  → 847 micro-stops since install
-→ calculate cost €                       → primary cause: bourrage (67%)
-→ push event to cloud"                   → avg cost: 18€/event"
+EDGE (always)                    CLIENT HISTORIAN          MindSet CLOUD (Hybrid only)
+─────────────────────            ─────────────────         ──────────────────────────
+SQLite ring buffer 7-15 days     PI System /               Aggregated KG snapshots only
++ persistent KG (site fingerprint)  Wonderware /           Transformed events for cross-site
+Raw events + causes + costs €    InfluxDB / MSSQL          NEVER raw OT data
+Auto-purge by TTL                Push enriched events      Encrypted before upload
+                                 (V1.5 connector)
 ```
 
 ---
@@ -421,15 +485,19 @@ Enterprise
 | Schedule deviation | `IF Actual_Duration_OT > ERP_Schedule_Time + 15% → Margin Eroded` |
 | Configurable threshold | UI wizard <15 min, zero dev |
 
-### Module 4 — Fuzzy Join / Temporal Engine
+### Module 4 — OF-State-Based Attribution Engine (formerly "Fuzzy Join")
 **Differentiation: Strong** — Universal unsolved problem in mid-market. Makes data 100% reliable.
 
+**Important correction (2026-06-28):** the original "sliding window ±10 min" approach fails on real-world ERP data — mid-market ERPs are updated by operators end-of-shift, so ERP timestamps lag OT by hours, not minutes. We use **OF-state-based attribution** instead:
+
 | Component | Detail |
-|-----------|--------|
-| Algorithm | Sliding window ±10 min around physical start detected at Edge |
-| Detection | Physical start peak (Run transition on Etat_Machine) → matched to ERP production order |
-| Result | Every micro-stop and every kWh tagged with correct production order and product |
-| Precision | Sub-second at the Edge |
+|---|---|
+| Algorithm | Poll ERP for OFs in status "In Progress" / "Released". Tag every OT event with the currently active OF. |
+| Robustness | **Survives multi-hour clock skew** between OT and IT — joins on OF state, not on timestamps. |
+| Detection | Active OF window: from OF "start" status → "complete" status (regardless of when ERP records were updated). |
+| Result | Every micro-stop, every kWh, every defect tagged with correct OF, product, planned schedule. |
+| Precision | Sub-second at the Edge once OF state is known; ERP poll interval is the bottleneck (1-5 min typical). |
+| Failure mode | If no OF is active in the ERP (rare), event is queued and back-attributed when the next OF appears. |
 
 ### Module 5 — Cost Model
 **Differentiation: Strong** — Nobody does this immediate calculation in the mid-market.
@@ -481,20 +549,57 @@ Total impact € = Time loss + Production loss + Energy loss
 | TRS below threshold | Email | "TRS Line 1 below 70% for 2h" |
 | Schedule gap >15% | Email | "OF#789 exceeds schedule time — margin eroded" |
 
-### Module 8 — Tribal Knowledge (V2)
+### Module 8 — Tribal Knowledge
 **Differentiation: Strong** — Field knowledge structured before it disappears.
 
-| Version | Mechanism |
-|---------|-----------|
-| V0 | Pre-filled dropdown in dashboard (Jam, Air Pressure, Series Change, Material Wait, Adjustment, Other) — 1 click |
-| V1 | Dropdown + free text field saved to local KG |
-| V2 | Local SLM chatbot (Ollama/Phi-3) — natural language, structured response, indexed in Knowledge Graph |
+**Important framing (2026-06-28):** the MOAT is the DATASET (sensor pattern → operator label associations), not the UX that captures it. V1 dropdown + free text accumulates the same site-specific dataset as a sophisticated chatbot. **The chatbot is polish, not the moat.** This means the moat ships in V1, not V2.
+
+| Version | Mechanism | Status |
+|---|---|---|
+| V0 | Pre-filled dropdown in dashboard (Jam, Air Pressure, Series Change, Material Wait, Adjustment, Other) — 1 click | **V1** |
+| V1 | Dropdown + free text field saved to local KG; cause linked to stop event | **V1** |
+| V2 | Local SLM chatbot (Ollama/Phi-3) — conversational interview with operator, structured extraction | V2 polish |
+
+The site-specific dataset (operator label paired with sensor pattern at the moment of stop) compounds over months and becomes **impossible to reconstruct without real-time on-site access** — no competitor can copy it post-hoc.
+
+---
+
+### Module 9 — MCP Server (NEW — V1)
+**Differentiation: Strong** — Edge MCP is the AI-native edge sovereignty story.
+
+| Component | Detail |
+|---|---|
+| What it is | Model Context Protocol server embedded in `cmd/server`. Exposes the local Knowledge Graph + pipelines as MCP tools (`kg_query`, `kg_describe_node`, `kg_list_events`, `kg_cost_summary`, etc.). |
+| Location | **Edge** by default (V1). Listens on `localhost:5000`. Customer's AI agents connect from inside the factory network. |
+| Compatible clients | Claude Desktop, Microsoft Copilot, ChatGPT custom connectors, any MCP-compatible AI agent (MCP is the de-facto standard since 2026). |
+| Sovereignty | Data never leaves the customer network. AI agent comes to the data, not the reverse. |
+| Cloud relay | Optional opt-in in V1.5+ for remote AI access scenarios (e.g., CEO at home asking via Claude Desktop on laptop). |
+| Differentiator | Cognite has MCP but **cloud-only** (data ships to Cognite). MaestroHub CEO claimed MCP in a podcast (unverified, likely cloud-side). UMH has none. **MindSet is the only edge MCP**. |
+
+---
+
+### Module 10 — Ad-hoc Analyst AI Agent (NEW — V1)
+**Differentiation: Strong** — Native AI in the product from day 1, not a V2 add-on.
+
+| Component | Detail |
+|---|---|
+| What it is | Chat panel embedded in the local React dashboard. Plant Manager types natural-language questions, gets grounded answers with KG sources cited. |
+| Example prompts | "How did Line 2 perform yesterday?" / "Top 5 micro-stop causes this month with their €cost." / "Which product had the most jams last week?" |
+| LLM runtime | **Phi-3 via Ollama (local) by default**. Optional remote LLM (any: OpenAI, Claude, Mistral) with explicit UI disclosure: *"Data will leave your network / EU."* |
+| Tool access | All MCP tools exposed by Module 9 — `kg_query`, `kg_list_events`, `kg_cost_summary`, etc. |
+| Grounding | Every answer cites the KG nodes / events that informed it. No free-text speculation. |
+| Persona | Plant Manager (primary), CFO / Ops Director (secondary). |
+| Out of scope V1 | Multi-turn complex reasoning · action-taking (recommendations) · tribal-knowledge interview · multi-site comparison. All deferred to V1.5/V2 (other agents in the 13-agent catalog — see `docs/MindSet_Competitive_Analysis_v2_2.xlsx` Sheet 7). |
+
+**V1 ships exactly this one agent.** The other 12 agents in the catalog (Daily Briefing, Discovery Coach, Tribal Knowledge Chatbot, Causality Reasoner, Trend Spotter, Multi-site Benchmarker, Cost Coach, Alert Triage, Maintenance Scheduler, Compliance Reporter, Connector Recommender, Tag Classifier) are V1.5+, V2, or V3+ based on customer demand signals.
 
 ---
 
 ## 9. Use Cases
 
-### Use Case 1 — Micro-Stops + OT/IT Reconciliation (POC, Priority #1)
+> **Framing (2026-06-28):** the use cases below are the **3 starter templates** that ship in V1. They are NOT the product. The product is the PLATFORM (rules engine + cost model + UNS + KG + MCP + AI agents). Customers + their AI agents build additional use cases (quality, changeover, predictive maintenance, schedule deviation, etc.) on top of the platform. The 3 starter templates exist so Plant Managers see concrete value in the day-1 demo while the platform pitch defends a broader TAM and customer-led roadmap. **Don't impose micro-stops as the only thing MindSet does** — pitch it as one of 3 ready templates, with more buildable in days.
+
+### Use Case 1 — Micro-Stops + OT/IT Reconciliation (V1 starter template #1)
 
 **Required tags (OPC-UA via SCADA preferred):**
 ```
@@ -532,7 +637,7 @@ STEP 5 — Gain potential
 
 ---
 
-### Use Case 2 — Energy Waste (POC, Priority #2)
+### Use Case 2 — Energy Waste (V1 starter template #2)
 
 **Additional tags:**
 ```
@@ -547,193 +652,244 @@ Off-prod waste : IF Etat_Machine=Stop AND Energy > Threshold → ALERT
 Cost per batch : Consumption during production order × Energy_Price → batch cost
 ```
 
-**Fast ROI argument:** Energy waste is visible within the first week, requires no ERP connection, and typically represents 10-15% reducible cost immediately.
+**3 levels of detection** (depends on ERP availability):
+
+| Level | What it detects | Needs ERP? |
+|---|---|---|
+| **Level 1 — Basic** | "Energy > X kW while machine state = Stop" → ALERT | NO — fast week-1 ROI argument |
+| **Level 2 — Cost-attributed** | "OF#456 wasted 18€ of steam during stop" | YES — needs OF context |
+| **Level 3 — Comparative** | "Product A uses 12% more energy than Product B for same output" | YES — needs OF + product context |
+
+**Sales angle:** Level 1 ships and demonstrates value before the ERP integration is done. Level 2/3 activate once the V1 ERP connector is configured. Energy typically represents **10-15% reducible cost immediately**.
 
 ---
 
-### Use Case 3 — Schedule Gaps & Margin (V1)
+### Use Case 3 — Real OEE vs Declared OEE (V1 starter template #3)
 
+The **single strongest demo** for the investor pitch and for the Plant Manager close. The whole story in one screen.
+
+**The two values:**
+
+**DECLARED OEE** — what operator/supervisor manually reports to MES/ERP. Typically optimistic: micro-stops not counted, downtime miscategorized, optimistic rounding. Usually **5-15 percentage points HIGHER** than reality.
+
+**REAL OEE** — what MindSet calculates from raw OT data:
+```
+Availability = (Planned_Time - Major_Stops - Micro-Stops) / Planned_Time
+  ← from OPC-UA Etat_Machine state transitions via rules engine
+Performance  = Actual_Output / Theoretical_Output
+  ← from Compteur_Pieces vs Cadence (cost-model config)
+Quality      = Good_Parts / Total_Parts
+  ← MES integration in V1.5; V1 uses customer-estimated defect rate
+OEE = Availability × Performance × Quality
+```
+
+**Schedule-gap detection (sub-use-case, V1.5):**
 ```
 IF Actual_Duration_OT > ERP_Schedule_Time + 15% → Alert "Margin Eroded"
 Loss = Gap_minutes × Line_Hourly_Cost
 ```
 
-**Output:** *"Production order #123 (Product A) lost 450€ — 12 micro-stops + 50€ steam waste. Action: optimize changeover for this product."*
+**The pitch:**
+> *"Your declared OEE is 88%. We measured every micro-stop on Line 1 last week — your REAL OEE is 74%. The 14-point gap = 1h04 of hidden downtime per week = X€/week. Here's the Pareto of causes — top 3 fixes recover Y€."*
+
+**The GAP itself is the value proposition** — it directly equals € the Plant Manager didn't know they were losing. Output example: *"OF#123 (Product A) lost 450€ — 12 micro-stops + 50€ steam waste. Action: optimize changeover for this product."*
+
+---
+
+### Use cases that customers + AI agents build NEXT (no commitment from MindSet)
+
+Quality / defect detection · Changeover / setup-time analysis · Predictive maintenance · Schedule deviation alerting · Operator productivity benchmarking · Compliance audit trail generation · Multi-site OEE benchmarking · Anything customer's AI agents can compose from the MCP toolset.
 
 ---
 
 ## 10. Full Roadmap
 
-### Phase 0 — Foundations (Weeks 1-2)
+> **Rewritten 2026-06-28.** The previous roadmap (32-week plan with parallel "Sessions 1-10") was over-optimistic for a 1-engineer team and didn't reflect the AI-native pull-forward + ERP-in-V1 decisions (see `docs/decisions.md`). New plan: AI-native V1, ERP connectors in V1, realistic timelines for solo dev + Claude Code, explicit hiring milestones, deferred items moved to V1.5 / V2 / V3+.
 
-**Objective:** Development infrastructure in place. No features yet, but everything ready to build fast.
+### Phase 0 — Foundations (DONE — June 2026)
 
-| Task | Priority |
-|------|----------|
-| Create GitHub repos: `mindset-data-edge`, `mindset-data-platform`, `mindset-data-website` (all private) | P0 |
-| Go project structure: `cmd/`, `internal/`, `config/`, `Dockerfile` | P0 |
-| `go mod init` + core dependencies (gopcua, goburrow/modbus, gos7, paho) | P0 |
-| Install Prosys OPC-UA Simulator (local test without factory) | P0 |
-| Install Claude Code: `npm install -g @anthropic-ai/claude-code` | P0 |
-| Docker Compose local dev stack (Edge Agent + OPC-UA simulator + API + PostgreSQL + Redis) | P0 |
-| Apache 2.0 LICENSE file in all repos | P0 |
-| Create `docs/mindset.md`, `docs/decisions.md`, `docs/context_starter.md` | P0 |
+Already shipped or in-progress at June 2026:
+- ✅ OPC-UA discovery (`internal/discovery/opcua.go`)
+- ✅ HTTP API server (`cmd/server`) on port 8080
+- ✅ Edge agent (`cmd/agent`) with MQTT + UNS contextualizer + KG subscriber
+- ✅ Knowledge Graph in SQLite (`internal/kg/`)
+- ✅ Pipeline engine — YAML pipelines, topological execution, recover()-protected
+- ✅ Pipeline Studio (React Flow) — drag-and-drop pipeline builder UI
+- ✅ KG viewer (Cytoscape) — technical + domain graphs
+- ✅ Dashboard skeleton with live WebSocket push
+- ✅ Tag registry + topic registry persisted to SQLite
+- ✅ State tracker
 
-**Exit criterion:** `go run cmd/agent/main.go` connects to Prosys simulator and prints node tree in terminal.
-
----
-
-### POC — Micro-Stops + Energy + OT/IT Reconciliation (Weeks 3-10)
-
-**Objective:** Plant Manager sees in under 48h what their micro-stops cost this week, to the euro, on which production orders, with causes — automatically.
-
-#### Sprint 1 — Connection & Discovery (Weeks 3-4)
-
-| Module | Task | Target file |
-|--------|------|-------------|
-| Network scanner | Subnet scan, OPC-UA/Modbus/S7/MQTT port detection | `internal/discovery/network.go` |
-| OPC-UA connector | Connection, node tree browse, tag extraction | `internal/discovery/opcua.go` |
-| Modbus connector | TCP connection, register scan, device fingerprint | `internal/discovery/modbus.go` |
-| S7 connector | Siemens S7 direct connection (gos7) | `internal/discovery/s7.go` |
-| Tag filter | Remove constants, duplicates, signals >10Hz | `internal/discovery/filter.go` |
-| SLM classifier | Phi-3 local via Ollama — semantic classification | `internal/classifier/slm.go` |
-| Behavioral inference | Live pattern matching 10-15 min | `internal/classifier/behavioral.go` |
-| UNS mapper | Tags → ISA-95 hierarchy | `internal/uns/mapper.go` |
-| Config loader | YAML config (site params, endpoints, thresholds) | `internal/config/config.go` |
-
-**Exit criterion:** Agent auto-identifies `Etat_Machine`, `Compteur_Pieces`, `Vitesse` on simulator without manual input.
-
-#### Sprint 2 — Rules Engine & Cost Model (Weeks 5-6)
-
-| Module | Task | Target file |
-|--------|------|-------------|
-| Rules engine | Deterministic engine core | `internal/rules/engine.go` |
-| Micro-stop logic | Run→Stop→Run pattern, configurable thresholds | `internal/rules/microstop.go` |
-| Energy rules | Off-prod waste detection | `internal/rules/energy.go` |
-| Causality | Tag correlation at stop timestamp | `internal/rules/causality.go` |
-| Cost model V0 | Manual 3-field entry, € calculation at Edge | `internal/cost/model.go` |
-| TRS calculator | Real_Availability, OEE, gain potential | `internal/cost/trs.go` |
-| SQLite storage | Local ring buffer 7-15 days | `internal/storage/sqlite.go` |
-
-**Exit criterion:** `"Micro-stop Line1 — 47s — Cause: Jam — Cost: 18€"` output in terminal.
-
-#### Sprint 3 — Fuzzy Join OT/IT (Weeks 7-8)
-
-| Module | Task | Target file |
-|--------|------|-------------|
-| SQL connector | PostgreSQL, MSSQL, Oracle via YAML config | `internal/connectors/sql.go` |
-| REST connector | Modern ERP polling, configurable | `internal/connectors/rest.go` |
-| Fuzzy Join engine | Sliding window ±10 min OT/IT alignment | `internal/fuzzy/join.go` |
-| Production order matching | Edge events → ERP production order | `internal/fuzzy/matcher.go` |
-| Schedule gap detection | Actual_OT vs ERP_Schedule > 15% | `internal/rules/schedule.go` |
-| Automated cost model | Import costs from ERP | `internal/cost/erp.go` |
-
-**Exit criterion:** Every micro-stop tagged with correct production order, product, and planned schedule automatically.
-
-#### Sprint 4 — Push, Security & Local Dashboard (Weeks 9-10)
-
-| Module | Task | Target file |
-|--------|------|-------------|
-| HTTPS Push | Send events to cloud API | `internal/push/cloud.go` |
-| TLS 1.3 + mTLS | Encryption + mutual auth | `internal/push/tls.go` |
-| API Key auth | Per-site unique key | `internal/push/auth.go` |
-| Offline queue | Queue locally if cloud unreachable, auto-sync | `internal/push/queue.go` |
-| Historian push | Push enriched events to client historian | `internal/push/historian.go` |
-| Cloud receiver | API endpoint that receives events (Go) | `api/handlers/events.go` |
-| Local dashboard | React app served from Edge Agent | `frontend/src/` |
-| Gantt timeline | Run/Stop/Setup timeline | `frontend/src/components/GanttTimeline.jsx` |
-| Pareto chart | Causes by € impact | `frontend/src/components/ParetoChart.jsx` |
-| ROI simulator | Real TRS vs declared + gain potential | `frontend/src/components/ROISimulator.jsx` |
-| Cause dropdown | V0 tribal knowledge (1-click) | `frontend/src/components/CauseDropdown.jsx` |
-| Onboarding wizard | 3-field cost entry | `frontend/src/pages/Onboarding.jsx` |
-| Local SMTP/Slack | Direct alerting from Edge | `internal/alerting/smtp.go` |
-| Docker image | Build + push `mindsetdata/edge-agent:v0` | `Dockerfile` |
-
-**Full POC exit criterion:**
-> Docker install in 1 command → automatic OPC-UA connection → micro-stop detection → OT/IT reconciliation → energy waste → dashboard with € losses by production order — in under 48h on site.
+**V1 work continues from this base, not from scratch.**
 
 ---
 
-### Website & Distribution (Weeks 5-8, parallel)
+### V1 — AI-Native POC (target: end Q1 2027 — ~6-9 months from today)
 
-| Task | Priority |
-|------|----------|
-| Next.js setup + deploy to Vercel (mindsetdata.io) | P0 |
-| Landing page (pitch, value prop, CTA) | P0 |
-| `/product` page (Connect / Contextualise / Decide / Act) | P0 |
-| `/use-cases` page (micro-stops + energy with € numbers) | P0 |
-| `/security` page (push-only, mTLS, RGPD/NIS2) | P0 |
-| `/download` page (form → API key → Docker command) | P0 |
-| `/contact` page (demo request) | P1 |
-| Docker Hub `mindsetdata/edge-agent` public image | P0 |
-| Email onboarding sequence (API key + 5-min setup guide) | P1 |
+**Thesis:** three concurrent tracks. Realistic for 1 engineer (Mohamed) with Claude Code acceleration. Hiring a 2nd engineer in this window compresses by ~30%.
 
-**Client install flow:**
-```powershell
-# Windows
-docker pull mindsetdata/edge-agent:latest
-docker run -d `
-  -e API_KEY=their-unique-key `
-  -e SITE_NAME="Usine Paris Nord" `
-  --network host `
-  mindsetdata/edge-agent:latest
-# → Agent starts, scans network, finds OPC-UA equipment
-# → Local dashboard available at http://localhost:3000 immediately
-# → Cloud dashboard available at app.mindsetdata.io within 1h
-```
+**Vertical sequencing in V1**: first pilot customer = **agrifood OR independent metallurgy** (self-serve Plant Manager motion, 48h deployment, <30k€/site — fastest sales cycle). **Pharma + cosmetics deferred to V1.5+** because they require enterprise IT-led sales (6-12 month cycle) + ISO 27001 + GAMP 5 + RBAC — those security additions aren't shipped until V1.5 per the security framework discussion (see analysis_log Entry 20).
+
+**Exit criterion:**
+> A first pilot customer in agrifood or metallurgy installs the Edge Agent in 48h, sees the 3 starter templates (micro-stop, energy waste, OEE/TRS) working with real data, queries the KG via the Ad-hoc Analyst chat, and a founder can demo Claude Desktop connecting to the edge MCP server during the customer meeting.
+
+#### Track 1 — Core data pipeline + ERP
+
+| Module | Detail | Target file |
+|---|---|---|
+| OPC-UA polish | Already shipped. Hardening: secure modes (Sign/SignAndEncrypt cert chain), session resilience, multiple-subscription support | `internal/discovery/opcua.go` |
+| Modbus TCP connector | TCP connection, register scan, device fingerprint DB (20-30 common devices) | `internal/discovery/modbus.go` |
+| **SQL connector — multi-dialect** | PostgreSQL (`pgx/v5`), MSSQL (`microsoft/go-mssqldb`), MySQL (`go-sql-driver/mysql`). Per-customer dialect via YAML config. | `internal/connectors/sql.go` |
+| **OF-state Fuzzy Join engine** | Poll ERP for active OFs; tag every OT event with current OF. **NOT sliding-window** — robust to multi-hour clock skew. (See Module 4 in §8.) | `internal/fuzzy/of_state.go` |
+| Cost model | 3-field manual entry wizard (hourly cost, cadence, margin); €/event + €/OF calculation | `internal/cost/model.go` |
+| OEE / TRS calculator | Real availability, performance, quality. Computes the declared-vs-real gap. | `internal/cost/oee.go` |
+| SQLite ring buffer | 7-15 day rolling window + TTL auto-purge | `internal/storage/ringbuffer.go` |
+| Push to cloud (Hybrid edition only) | mTLS + TLS 1.3, offline queue with auto-sync | `internal/push/` |
+| Heartbeat monitor | Reports liveness to cloud every 60s; cloud alerts if missing | `internal/push/heartbeat.go` |
+| **Local MQTT broker bundle** | Mosquitto as sidecar in docker-compose. Localhost-only listener, no auth needed (intra-container). | `deploy/docker-compose.yml` + `mosquitto.conf` |
+| **License key validator** | Validates license against cloud at startup; gracefully degrades to cached entitlements if offline | `internal/license/validator.go` |
+| **Local secrets management** | SOPS-encrypted config files for ERP credentials + LLM API keys + cloud auth keys | `internal/secrets/sops.go` + `config/secrets.enc.yaml` |
+
+#### Track 2 — AI core (NEW priority — pulled forward from V2)
+
+| Module | Detail | Target file |
+|---|---|---|
+| Phi-3 + Ollama integration | Local LLM runtime, model loading, prompt execution, health check | `internal/llm/ollama.go` |
+| **MCP server (edge)** | Wraps KG + cost + events API as MCP tools (`kg_query`, `kg_list_events`, `kg_cost_summary`, `kg_describe_node`, etc.). Listens on `localhost:5000`. | `internal/mcp/server.go` |
+| **Ad-hoc Analyst agent** | Chat UI in dashboard. Phi-3 default + optional remote LLM with disclosure warning. Grounded answers cite KG sources. | `frontend/src/components/AdHocChat.jsx` + `internal/agents/adhoc.go` |
+| Remote LLM config | UI toggle to plug OpenAI / Claude / Mistral. Explicit warning displayed when enabled. | `internal/llm/remote.go` |
+
+#### Track 3 — 3 starter templates + UX polish
+
+| Template / module | Detail | Persona |
+|---|---|---|
+| **Template 1 — Micro-stop + cost €** | Run→Stop→Run (30s<dur<3min), cause dropdown, Pareto by €. Already partial. | Plant Manager |
+| **Template 2 — Energy waste** | Level 1 (no ERP): "Energy > X kW while machine stopped" → alert. Level 2 (with ERP): "OF#456 wasted 18€ of steam." | Plant Manager + CFO |
+| **Template 3 — OEE / TRS dashboard** | Real availability vs declared. Shows the gap in €/week. **The killer demo.** | Plant Manager + CFO |
+| Onboarding wizard | 3-field cost entry + OPC-UA endpoint config + ERP credentials | All |
+| **Tribal Knowledge V1** | 1-click cause dropdown + free-text field on every stop event; saved to KG with link to the event. **The moat ships in V1.** | Operator |
+| Dashboard polish | Gantt, Pareto €, ROI simulator, real-vs-declared OEE | Plant Manager |
+| Local alerting | SMTP + Slack + Teams direct from edge | All |
+| Docker image | `mindsetdata/edge-agent:v1` on PRIVATE registry (proprietary license — distribution-controlled) | — |
+
+#### Parallel track — Website + first customers
+
+| Task | Notes |
+|---|---|
+| `mindsetdata.io` marketing site (Next.js / Vercel) | Landing + product + use-cases + security + demo-request flow |
+| Distribution decision | Private registry (proprietary license affects this) — NOT public Docker Hub like the original roadmap assumed |
+| Identify 1-3 pilot customers | Target FR ETI manufacturing — agrifood, pharma, light manufacturing |
+| Sales-deck | Already done — `MindSet_Competitive_Analysis_v2_2.xlsx`. Refresh per customer-context. |
+
+#### Hiring milestone in V1
+
+- **Engineer #2 (full-stack Go)** — hire within 4 months of seed close. Compresses V1 timeline by ~30%.
+  - Profile: senior Go developer, comfortable with both edge connectors AND React/dashboard work.
 
 ---
 
-### V1 — Multi-site + Deep ERP + Historian (Weeks 11-18)
+### V1.5 — Multi-site + AI agent expansion (target: Q2-Q3 2027)
+
+**Triggered when:** 5+ pilot customers signed AND first multi-site customer requests aggregation.
 
 | Module | Description | Priority |
-|--------|-------------|----------|
-| Multi-site aggregation | Cross-site KG, inter-site benchmarking | P0 |
-| Files + FTP/SFTP connector | CSV/Excel/JSON import from network shares | P0 |
-| Historian connector (PI/Wonderware/InfluxDB) | Push enriched events to client's historian | P0 |
-| MQTT connector | Modern IIoT gateways | P1 |
-| Sparkplug B | Native ISA-95 MQTT payload | P1 |
-| InfluxDB connector | Digitalized ETI historians | P1 |
-| Multi-site dashboard V1 | Cross-site Pareto, site comparison | P0 |
-| Microsoft Teams alerting | Microsoft-centric ETI | P1 |
-| BYOC deployment | Docker-compose for on-premise cloud | P1 |
-| Auto-update Edge Agent | Automatic update from Docker Hub | P1 |
+|---|---|---|
+| Cross-site KG aggregation | Hybrid edition: cloud-side KG receives transformed events from multiple edges | P0 |
+| Multi-site dashboard | Site-vs-site Pareto, benchmark views (CEO / Ops Director persona) | P0 |
+| **AI agent expansion (4-5 new agents)** | Daily Briefing, Alert Triage, Discovery Coach, Tag Classifier (agentic) | P0 |
+| S7 connector (Siemens) | `gos7` — covers 30-40% of European industrial park | P1 |
+| REST connector | Modern ERPs (SAP S/4HANA, D365, Sage X3) | P1 |
+| Files / FTP / SFTP connector | CSV / Excel / JSON import from network shares | P1 |
+| Cloud MCP relay (opt-in) | For customers wanting remote AI access without VPN | P1 |
+| Historian connector (PI / Wonderware / InfluxDB) | Push enriched events to customer's existing historian | P1 |
+| Microsoft Teams alerting | Microsoft-centric ETIs | P2 |
+| 4th + 5th starter templates | Based on first-customer signals (candidates: Quality, Changeover, Schedule deviation) | P0 |
+| Schedule-gap detection (sub-feature of OEE template) | `IF Actual_Duration_OT > ERP_Schedule_Time + 15% → Margin Eroded` alert | P1 |
 
-**V1 success criterion:**
-> Every completed production order automatically shows: actual time vs ERP schedule, exact energy cost, realized margin vs theoretical margin. Across all connected sites.
+**V1.5 exit criterion:**
+> Multi-site customer sees consolidated cross-site OEE + cost + Pareto in cloud dashboard. AI Daily Briefing arrives in inbox at 6am every weekday.
+
+**Hiring milestone:** Engineer #3 (DevOps / cloud platform) for multi-tenant cloud + K8s automation for Self-Hosted edition.
 
 ---
 
-### V2 — Open UNS + AI Agents + Tribal Knowledge (Weeks 19-32)
+### V2 — Deep AI + ecosystem (target: Q4 2027 - Q1 2028)
+
+**Triggered when:** 15+ paying customers, V1.5 stable, 6+ months of accumulated tribal-knowledge dataset.
 
 | Module | Description | Priority |
-|--------|-------------|----------|
-| Semantic UNS API | REST/GraphQL on Knowledge Graph for AI agents | P0 |
-| Tribal Knowledge chatbot | Ollama/Phi-3 local — natural language cause capture | P0 |
-| Native AI agents | Automatic diagnosis, action suggestion | P1 |
-| MTConnect | CNC/machining/metallurgy | P1 |
-| BACnet/IP | Building energy management | P2 |
-| Omron FINS | Agrifood/pharma niche | P2 |
-| MongoDB connector | Modern MES | P2 |
-| Partner SDK | Integrators and ISV can connect to UNS | P2 |
-| Functions marketplace | No-code function library by industry | P2 |
-| Predictive model | ML on historical patterns → failure prediction | P2 |
+|---|---|---|
+| **Tribal Knowledge Chatbot** | Phi-3 conversational interview with operator after each stop — replaces V1 dropdown for richer capture. (Note: the MOAT — the dataset — already ships in V1. This is UX polish, not the moat.) | P0 |
+| **Causality Reasoner agent** | "Pressure dropped 12s before this stop — could be a leak." Multi-step LLM reasoning. | P0 |
+| **Trend Spotter agent** | Proactive surfacing: "Stops on Line 3 doubled in 3 days." | P1 |
+| **Multi-site Benchmarker agent** | "Site A vs Site B on TRS / causes / cost." | P1 |
+| **Cost Coach agent** | Explains cost model to CFO; suggests refinements | P1 |
+| Sparkplug B | MQTT with ISA-95 structured payload | P1 |
+| MQTT generic | Modern IIoT gateways | P1 |
+| MTConnect | CNC / machining / metallurgy | P2 |
+| BACnet/IP | Building / HVAC for energy-intensive sites | P2 |
+| BYOC deployment automation | Helm charts + docker-compose for customer on-prem K8s | P0 |
+| **Public MCP tool catalog** | Documented MCP schema so partners can build agents on top | P1 |
+| Auto-update Edge Agent | Roll out new versions to consenting customers | P1 |
 
-**V2 success criterion:**
-> A third-party AI agent queries factory context and produces reliable recommendations without hallucination, using the UNS as source of truth.
+**V2 exit criterion:**
+> A third-party AI agent (e.g., Claude Desktop on a customer's CISO laptop) queries the factory KG via MCP and produces a grounded compliance report — no hallucinations, all sources cited.
+
+**Hiring milestone:** Engineer #4 (ML / data eng) — owns AI agent quality, eval harness, and the tribal-knowledge dataset operationalization.
 
 ---
 
-### V3+ — European OS Infrastructure (Month 9+)
+### V3+ — Scaling + ecosystem (2028-2029)
+
+**Triggered when:** 50+ paying customers, V2 stable, considering international expansion.
 
 | Axis | Description |
-|------|-------------|
-| UNS as a Service | Open standard for ETI manufacturing data infrastructure |
-| Ecosystem | Integrators, ISV, AI agents as partners on the UNS |
-| Cloud connectors | Kafka, AWS S3, Azure Blob, Google Pub/Sub, NATS |
-| Data Act positioning | EU Data Act compliance infrastructure |
-| Cross-industry KG | Cross-site benchmarks → sectoral reference data |
-| Acquisition moat | Each site = irreplaceable cumulative context → structurally impossible churn |
+|---|---|
+| **License reconsideration (2028)** | Per locked decision: evaluate open-core or source-available models for the edge agent. Cloud + enterprise stays proprietary. Decision driven by whether OSS pressure from UMH/others is causing lost deals. |
+| **Hyperscaler edition reconsideration (2029)** | Per locked decision: separate product line for US/APAC scaling (AWS / Azure / GCP). EU pipeline stays no-hyperscaler. Decision driven by international demand signals and whether sovereignty moat is established enough to survive a separate "global" SKU. |
+| **Predictive ML** | On accumulated KG dataset — failure prediction per machine, product, season. Per-site model trained on local data. |
+| **Cross-industry KG benchmarks** | Sectoral anonymized data: "you are at the X-th percentile of agrifood ETIs for stop frequency." Opt-in. |
+| **Partner SDK** | Integrators + ISVs build custom MCP tools + connectors + agents on the platform |
+| **Functions marketplace** | Curated community library of YAML pipelines per industry. Build only if community demand materializes (current: no, defer). |
+| **Additional protocols (V3 catalog)** | Kafka, AWS S3, Azure Blob, NATS, MongoDB, Omron FINS, OPC-DA, LoRaWAN — driven by customer demand, not pre-decided. |
+| **Acquisition moat at scale** | Each site = irreversible cumulative site fingerprint → structurally impossible churn. Cross-industry KG → sectoral reference data only MindSet has. |
+
+---
+
+### Timeline & headcount summary
+
+| Phase | Target | Headcount required | Realistic? |
+|---|---|---|---|
+| V1 (POC complete, 1-3 pilot customers) | Q1 2027 | 1-2 engineers | YES with 2nd engineer hired month 1-2 post-seed. TIGHT solo. |
+| V1.5 (multi-site, 5-10 customers) | Q3 2027 | 3 engineers | Feasible |
+| V2 (deep AI, 15-25 customers) | Q1 2028 | 4 engineers | Feasible |
+| V3+ (50+ customers, international option) | 2028-2029 | 6-8 engineers | Requires Series A funding |
+
+**Key insight on team size:** the previous roadmap assumed parallel "Sessions 1-10" execution which requires multiple engineers running in parallel. With **1 engineer (current state)**, realistic V1 ship is **6-9 months solo, OR 4-5 months with a 2nd engineer hired in month 1-2 of post-seed funding.** The investor pitch should explicitly request funding to hire 2-3 engineers within 6 months — not pretend the 2-founder team can ship the V2 vision alone.
+
+---
+
+### Distribution model (revised — proprietary license affects this)
+
+Original roadmap assumed public Docker Hub distribution. The locked closed-source decision changes this:
+
+**V1 distribution:**
+```powershell
+# Customer receives a license key + private registry credentials after signing.
+docker login registry.mindsetdata.io -u customer-name -p <license-key>
+docker pull registry.mindsetdata.io/edge-agent:v1
+docker run -d `
+  -e LICENSE_KEY=<key> `
+  -e SITE_NAME="Usine Paris Nord" `
+  -e EDITION=hybrid `
+  --network host `
+  registry.mindsetdata.io/edge-agent:v1
+# → Agent starts, scans network, finds OPC-UA equipment
+# → Local dashboard available at http://localhost:8080 immediately
+# → Hybrid edition: cloud dashboard available at app.mindsetdata.io within 1h
+```
+
+Distribution gates: license key required, telemetry of license validity, no free public-Docker-Hub pull. **Reconsidered in 2028 if license model shifts to open-core** (then Edge Agent goes back to public Docker Hub; only cloud/enterprise features stay license-gated).
 
 ---
 
@@ -945,20 +1101,34 @@ jobs:
 
 ```
 mindsetdata.io              ← Marketing (Next.js / Vercel — free)
-app.mindsetdata.io          ← Cloud dashboard (React / Scaleway)
-api.mindsetdata.io          ← Cloud API receiver (Go / Scaleway)
-hub.docker.com/mindsetdata  ← Edge Agent Docker image (free public)
+app.mindsetdata.io          ← Hybrid edition cloud dashboard (React / Scaleway FR)
+api.mindsetdata.io          ← Hybrid edition cloud API receiver (Go / Scaleway FR)
+hub.docker.com/mindsetdata  ← Edge Agent Docker image (proprietary binary distribution)
 ```
 
-### Scaleway FR — V0 minimal cost
+### Cost per edition (per site)
+
+| Edition | Cloud cost / month | What drives it |
+|---|---|---|
+| **On-Premise** | **0 €** — zero cloud component | Customer pays own edge hardware (~600€ amortized PC) |
+| **Hybrid (default)** | **~15 €** at V0 (Scaleway FR PLAY2-NANO + Managed PostgreSQL + Object Storage). Scales with multi-site customers (~30-50€/mo for 5+ sites). | KG aggregation + remote dashboard + encrypted backup + heartbeat monitor |
+| **Self-Hosted** | **Variable — customer pays** their EU cloud account. Indicative: Hetzner CX21 ~5€, Scaleway VPS 7-15€, OVH 8-12€, Bleu = TBD, on-prem K8s = sunk cost. | Same workload as Hybrid, on customer infra |
+
+**Bleu note:** Bleu is the FR sovereign cloud joint venture (Orange + Capgemini using Microsoft Azure tech under FR jurisdiction). Valid Self-Hosted target for customers wanting Azure-style services with FR sovereignty guarantees.
+
+### Scaleway FR — Hybrid edition V0 detail
 
 ```
 1× PLAY2-NANO VPS (2 vCPU, 2GB RAM)   → 3.99€/month
 1× Managed PostgreSQL DEV-1500         → 9.99€/month
-1× Object Storage (backups)            → pay per use ~1€/month
+1× Object Storage (KG snapshots)       → pay per use ~1€/month
 ──────────────────────────────────────────────────────
-Total V0: ~15€/month
+Total V0 per customer:                 → ~15€/month
 ```
+
+### NOT offered — Hyperscaler edition
+
+AWS / Azure / GCP (including their EU regions) are **explicitly excluded** from the catalog through 2029. Reason: US CLOUD Act exposure invalidates the sovereignty pitch for the highest-value verticals (defense, public sector, regulated pharma). Reconsidered for international scaling in 2029 — at that point it becomes a separate product line, not a dilution of the core offering.
 
 ### Local dev docker-compose
 
@@ -1016,26 +1186,31 @@ volumes:
 ## 13. Tech Stack
 
 | Layer | Technology | Version | Justification |
-|-------|------------|---------|---------------|
+|---|---|---|---|
 | Edge Agent | Go + Docker | Go 1.22+ | Lightweight, static binary, cross-platform, low footprint |
 | OPC-UA | `gopcua` | latest | Mature, browse + subscriptions + security |
 | Modbus | `goburrow/modbus` | latest | TCP + RTU |
-| Siemens S7 | `gos7` | latest | Direct PLC Siemens access |
+| Siemens S7 (V1.5+) | `gos7` | latest | Direct PLC Siemens access |
 | MQTT | `paho.mqtt.golang` | latest | Eclipse standard |
-| Sparkplug B | `sparkplug-go` | latest | Structured industrial payload |
-| SQL | `database/sql` + drivers | — | pgx, go-mssqldb, go-ora |
+| Sparkplug B (V2) | `sparkplug-go` | latest | Structured industrial payload |
+| SQL — PostgreSQL | `pgx/v5` | latest | Modern ERPs, Odoo, custom |
+| SQL — MSSQL | `microsoft/go-mssqldb` | latest | Sage X3, Dynamics 365 on-prem |
+| SQL — MySQL | `go-sql-driver/mysql` | latest | Web-based ERPs |
+| SQL — Oracle (V1.5+) | `sijms/go-ora` | latest | SAP large accounts |
 | Local SLM | Phi-3 via Ollama | latest | Sovereign, zero latency, zero cloud |
-| Local DB | SQLite | — | Zero deps, ring buffer |
+| **MCP server** | Anthropic MCP spec (de-facto standard since 2026) | latest | Edge-default; exposes KG to AI agents |
+| Local DB | SQLite (`modernc.org/sqlite`) | — | Zero deps, ring buffer, pure-Go |
 | Pipeline | Redpanda Connect | latest | ex-Benthos, declarative YAML |
 | Ontology | ISA-95 | standard | Maximum interoperability |
 | Encryption | mTLS + TLS 1.3 | — | NIS2 compliant |
-| Cloud DB | PostgreSQL + TimescaleDB | pg15 | Time-series + events |
-| Cache | Redis | 7 | Real-time dashboard |
-| Cloud | Scaleway / OVH | — | FR sovereignty, RGPD |
-| Frontend | React | 18+ | Local + cloud dashboard |
+| Cloud DB (Hybrid) | PostgreSQL + TimescaleDB | pg15 | Time-series + events |
+| Cache (Hybrid) | Redis | 7 | Real-time dashboard |
+| Cloud (Hybrid) | Scaleway FR / OVH FR | — | FR sovereignty, RGPD. **No hyperscaler edition through 2029.** |
+| Cloud (Self-Hosted) | Hetzner / IONOS / T-Systems / 3DS Outscale / Bleu / customer K8s | — | Customer's EU jurisdiction choice |
+| Frontend | React | 19+ | Local + cloud dashboard |
 | Website | Next.js | 14+ | SEO, Vercel deploy |
-| CI/CD | GitHub Actions | — | Free, build + test + push Docker |
-| License | Apache 2.0 | — | Open, permissive |
+| CI/CD | GitHub Actions | — | Build + test + push Docker |
+| **License** | **Proprietary (closed-source, 2-year minimum)** | — | Early-stage commercial protection. Open-core / source-available reconsidered in 2028. |
 
 ---
 
@@ -1058,19 +1233,22 @@ volumes:
 
 ## 15. Tech Moat
 
-### The 4 defensive elements
+### The 5 defensive elements (revised 2026-06-28)
 
 **1. Zero-manual auto-discovery**
-Network scan + behavioral inference + SLM = automatic connection without mapping. 48h vs 3 months for an integrator. Structural advantage on client acquisition cost.
+Network scan + behavioral inference + Phi-3 SLM classification = automatic connection without mapping. 48h vs 3 months for an integrator. Structural advantage on client acquisition cost.
 
-**2. The Fuzzy Join**
-OT/IT temporal alignment — the universal unsolved problem in mid-market. The sliding window algorithm that re-attaches the ERP clock and the machine clock is the most defensive component in the stack: hard to build, invisible from the outside.
+**2. OF-state-based attribution (formerly "Fuzzy Join")**
+OT/IT reconciliation by reading **Fabrication Order state from the ERP** — not by joining on timestamps. Robust to multi-hour clock skew typical of mid-market ERPs (where operators update records end-of-shift). Every micro-stop, every kWh, every defect correctly tagged with product + OF, without per-customer time-sync engineering. UMH leaves this to the user (Node-RED); MaestroHub doesn't address it as a dedicated feature; Cognite does entity contextualization (P&ID OCR) — a different problem. Hard to build, invisible from outside — the most defensible component in the stack.
 
 **3. The cumulative Knowledge Graph (site fingerprint)**
-Site-specific non-replicable context. Replacing Mindset Data = losing all accumulated intelligence. Churn structurally becomes prohibitive.
+Site-specific non-replicable context: every micro-stop, every cause, every calibrated cost model accumulates over months. Replacing MindSet = losing all accumulated intelligence. After 6 months on-site, **churn becomes structurally prohibitive**.
 
-**4. Tribal Knowledge structured over time (V2)**
-`sensor pattern → operator label` associations: impossible to reconstruct without access to the same site in real time. No competitor can copy this dataset.
+**4. Tribal Knowledge structured over time — ships in V1**
+`sensor pattern → operator label` associations: impossible to reconstruct without real-time on-site access. **The MOAT is the dataset, NOT the chatbot UX** — V1 captures the dataset via 1-click dropdown + free text. V2 chatbot is polish, not the moat. Compounds with moat #3 (site fingerprint).
+
+**5. Edge sovereignty + edge MCP (NEW)**
+MindSet runs MCP server AT THE EDGE — AI agents (Claude, Copilot, our Ad-hoc Analyst) query the factory floor directly without raw data leaving the customer network. Cognite has MCP but cloud-only (data ships to Cognite cloud). MaestroHub CEO claims MCP in a podcast (unverified, likely cloud-side if real). UMH has none. Combined with **no-hyperscaler-edition through 2029**, this is the strongest EU-regulatory moat — defense, public sector, regulated pharma cannot use the others.
 
 ### Value curve over time
 
