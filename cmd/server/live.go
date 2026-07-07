@@ -200,7 +200,48 @@ func (h *LiveHub) Start(client mqtt.Client) error {
 			var evt map[string]interface{}
 			if json.Unmarshal(m.Payload(), &evt) == nil {
 				evt["_topic"] = m.Topic()
+
+				// Status-change events (from the rules engine, which detects
+				// Run↔Stop on mindset/site/#) — ALSO drive the state tracker.
+				// This is critical: when OPC-UA tags route through isa95/UNS
+				// (mindset/site/#) rather than raw (mindset/raw/#), the raw
+				// branch below never fires, so this is the only path that
+				// keeps the dashboard's timeline + machine status alive.
+				if m.Topic() == "mindset/events/status-change" {
+					wc, _ := evt["work_center"].(string)
+					current, hasCurrent := evt["current_state"].(bool)
+					if wc != "" && hasCurrent {
+						if changed := h.states.observe(wc, current, now); changed {
+							h.emit("state", map[string]interface{}{"work_center": wc, "running": current})
+						}
+					}
+				}
+
 				h.emit("event", evt)
+			}
+			return
+		}
+
+		// UNS-contextualized status tags on mindset/site/# → also feed state.
+		// The rules engine already does this to emit status-change events, but
+		// observing here too covers the case where the rules engine isn't
+		// running (agent off) yet the API server is up.
+		if strings.HasPrefix(m.Topic(), "mindset/site/") {
+			var enriched struct {
+				Value    interface{} `json:"value"`
+				Metadata struct {
+					TagName    string `json:"tag_name"`
+					WorkCenter string `json:"work_center"`
+				} `json:"metadata"`
+			}
+			if json.Unmarshal(m.Payload(), &enriched) == nil {
+				if isStatusTag(enriched.Metadata.TagName) && enriched.Metadata.WorkCenter != "" {
+					if b, ok := toBool(enriched.Value); ok {
+						if changed := h.states.observe(enriched.Metadata.WorkCenter, b, now); changed {
+							h.emit("state", map[string]interface{}{"work_center": enriched.Metadata.WorkCenter, "running": b})
+						}
+					}
+				}
 			}
 			return
 		}
@@ -227,16 +268,41 @@ func (h *LiveHub) Start(client mqtt.Client) error {
 	return tok.Error()
 }
 
-// workCenterOf extracts the machine name from a tag name like "machine1.status".
+// workCenterOf extracts the machine name from a dot-notation OPC-UA tag name.
+// For flat names ("machine1.status") the machine is the head. For ISA-95-style
+// hierarchies ("Usine_Paris_Nord.Ligne1.machine1.status") the machine is the
+// segment immediately preceding the leaf attribute — taking the head would
+// wrongly report the SITE as the work center.
 func workCenterOf(name string) (string, bool) {
-	if i := strings.Index(name, "."); i > 0 {
-		return name[:i], true
+	parts := strings.Split(name, ".")
+	if len(parts) < 2 {
+		return "", false
 	}
-	return "", false
+	return parts[len(parts)-2], true
 }
 
+// isStatusTag matches multiple naming conventions used across OPC-UA + UNS setups.
+// Matches (case-insensitive): "status", ".status", "state", ".state", "running",
+// "etat", ".etat", "etat_machine", "machine_status", "marche".
+// The intent is to be liberal — the dashboard needs SOME status signal to work
+// on real-world PLCs where naming isn't standardized.
 func isStatusTag(name string) bool {
-	return strings.HasSuffix(strings.ToLower(name), ".status")
+	if name == "" {
+		return false
+	}
+	n := strings.ToLower(name)
+	// Direct match — the UNS mapper often flattens the tag name to just "status".
+	switch n {
+	case "status", "state", "running", "etat", "marche":
+		return true
+	}
+	// Suffix matches on dot-notation OPC-UA names.
+	for _, suffix := range []string{".status", ".state", ".running", ".etat", ".marche", "_status", "_state", "etat_machine", "machine_status"} {
+		if strings.HasSuffix(n, suffix) || strings.Contains(n, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func toBool(v interface{}) (bool, bool) {

@@ -1,4 +1,8 @@
 // internal/kg/graph.go
+// Unified Knowledge Graph (2026-07-02 merge — see docs/analysis_log.md Entry 50).
+// One graph, one storage layer. Nodes/edges tagged with Category (business/platform).
+// Platform sub-graph (Pipeline/Function/Topic/Connection/Dashboard) is rebuilt
+// from the pipeline registry — this replaces the previous in-memory "Technical KG".
 package kg
 
 import (
@@ -12,19 +16,23 @@ import (
 	"github.com/MindsetAdmin/mindset-data-edge/internal/storage"
 )
 
-
-// Node représente un nœud dans le Knowledge Graph
+// Node — unified KG node. Category = business | platform.
 type Node struct {
 	ID         string                 `json:"id"`
+	Category   string                 `json:"category"`
 	Type       string                 `json:"type"`
 	Label      string                 `json:"label"`
 	Properties map[string]interface{} `json:"properties,omitempty"`
 	CreatedAt  time.Time              `json:"created_at"`
 }
 
-// Edge représente une relation entre deux nœuds
+// Edge — unified KG relation. Category inherited from context (business events vs
+// platform wiring). Cross-category edges (e.g., Dashboard→Event) are legal and
+// take the more specific side's category — by convention, edges written during
+// platform rebuild are category=platform even if they land on a business node.
 type Edge struct {
 	ID        string    `json:"id"`
+	Category  string    `json:"category"`
 	FromID    string    `json:"from_id"`
 	ToID      string    `json:"to_id"`
 	Relation  string    `json:"relation"`
@@ -32,27 +40,21 @@ type Edge struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// GraphJSON pour Cytoscape
+// GraphJSON — the shape returned to the frontend (Cytoscape-friendly).
 type GraphJSON struct {
 	Nodes []Node `json:"nodes"`
 	Edges []Edge `json:"edges"`
 }
 
-// CachedTechnicalGraph stocke le graphe avec un timestamp
-type CachedTechnicalGraph struct {
-	Graph     *TechnicalGraph
-	Generated time.Time
-	CacheKey  string // Hash des pipelines pour détecter les changements
-}
-
-// KnowledgeGraph gère le graphe de connaissances
+// KnowledgeGraph — the single source of truth for site + platform data.
 type KnowledgeGraph struct {
-	store       *storage.SQLiteStore
-	cachedGraph *CachedTechnicalGraph
-	cacheMu     sync.RWMutex
+	store        *storage.SQLiteStore
+	platformMu   sync.Mutex // serialize platform rebuilds
+	lastRebuilt  time.Time
+	lastRegHash  string
 }
 
-// NewKnowledgeGraph crée un nouveau KG
+// NewKnowledgeGraph opens (or creates) the unified KG.
 func NewKnowledgeGraph(dbPath string) (*KnowledgeGraph, error) {
 	store, err := storage.NewSQLiteStore(dbPath)
 	if err != nil {
@@ -61,8 +63,14 @@ func NewKnowledgeGraph(dbPath string) (*KnowledgeGraph, error) {
 	return &KnowledgeGraph{store: store}, nil
 }
 
-// AddNode ajoute un nœud (ignore si existe déjà)
+// AddNode inserts or ignores. Uses category="business" as the safe default when
+// legacy callers don't specify one; new code should use AddNodeCat.
 func (kg *KnowledgeGraph) AddNode(id, nodeType, label string, props map[string]interface{}) error {
+	return kg.AddNodeCat(CategoryBusiness, id, nodeType, label, props)
+}
+
+// AddNodeCat inserts or ignores a node under an explicit category.
+func (kg *KnowledgeGraph) AddNodeCat(cat Category, id, nodeType, label string, props map[string]interface{}) error {
 	var propsJSON string
 	if props != nil {
 		jsonBytes, err := json.Marshal(props)
@@ -71,144 +79,124 @@ func (kg *KnowledgeGraph) AddNode(id, nodeType, label string, props map[string]i
 		}
 		propsJSON = string(jsonBytes)
 	}
-
-	query := `INSERT OR IGNORE INTO kg_nodes (id, type, label, properties) VALUES (?, ?, ?, ?)`
-	_, err := kg.store.DB().Exec(query, id, nodeType, label, propsJSON)
-	if err != nil {
+	query := `INSERT OR IGNORE INTO kg_nodes (id, category, type, label, properties) VALUES (?, ?, ?, ?, ?)`
+	if _, err := kg.store.DB().Exec(query, id, string(cat), nodeType, label, propsJSON); err != nil {
 		return err
 	}
-	log.Printf("[KG] Added node: %s (%s)", label, nodeType)
 	return nil
 }
 
-// AddEdge ajoute une relation
+// AddEdge — business default.
 func (kg *KnowledgeGraph) AddEdge(id, fromID, toID, relation string, weight float64) error {
-	query := `INSERT INTO kg_edges (id, from_id, to_id, relation, weight) VALUES (?, ?, ?, ?, ?)`
-	_, err := kg.store.DB().Exec(query, id, fromID, toID, relation, weight)
-	if err != nil {
+	return kg.AddEdgeCat(CategoryBusiness, id, fromID, toID, relation, weight)
+}
+
+// AddEdgeCat — explicit category.
+func (kg *KnowledgeGraph) AddEdgeCat(cat Category, id, fromID, toID, relation string, weight float64) error {
+	query := `INSERT OR IGNORE INTO kg_edges (id, category, from_id, to_id, relation, weight) VALUES (?, ?, ?, ?, ?, ?)`
+	if _, err := kg.store.DB().Exec(query, id, string(cat), fromID, toID, relation, weight); err != nil {
 		return err
 	}
-	log.Printf("[KG] Added edge: %s → %s (%s)", fromID, toID, relation)
 	return nil
 }
 
-// AddMicroStop enrichit le KG avec un micro-stop
+// AddMicroStop enrichit le KG (business) avec un micro-stop
 func (kg *KnowledgeGraph) AddMicroStop(eventID, workCenter string, duration float64) error {
-	// Nœud événement
 	eventNodeID := fmt.Sprintf("event_%s", eventID)
-	err := kg.AddNode(eventNodeID, "Event", "Micro-stop", map[string]interface{}{
+	if err := kg.AddNodeCat(CategoryBusiness, eventNodeID, "Event", "Micro-stop", map[string]interface{}{
 		"duration_seconds": duration,
 		"type":             "microstop",
 		"work_center":      workCenter,
-	})
-	if err != nil {
+	}); err != nil {
 		return err
 	}
-
-	// Nœud machine (si n'existe pas déjà)
 	machineNodeID := fmt.Sprintf("machine_%s", workCenter)
-	err = kg.AddNode(machineNodeID, "Equipment", workCenter, map[string]interface{}{
+	if err := kg.AddNodeCat(CategoryBusiness, machineNodeID, "Equipment", workCenter, map[string]interface{}{
 		"work_center": workCenter,
-	})
-	if err != nil {
+	}); err != nil {
 		return err
 	}
-
-	// Relation: événement → machine
 	edgeID := fmt.Sprintf("edge_%s_%s", eventID, workCenter)
-	err = kg.AddEdge(edgeID, eventNodeID, machineNodeID, "occurred_at", 1.0)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return kg.AddEdgeCat(CategoryBusiness, edgeID, eventNodeID, machineNodeID, "occurred_at", 1.0)
 }
 
-// AddCause ajoute une cause à un micro-stop
+// AddCause — business enrichment
 func (kg *KnowledgeGraph) AddCause(eventID, cause string, confidence float64) error {
-	// Nœud cause
 	causeNodeID := fmt.Sprintf("cause_%s", cause)
-	err := kg.AddNode(causeNodeID, "Cause", cause, map[string]interface{}{
+	if err := kg.AddNodeCat(CategoryBusiness, causeNodeID, "Cause", cause, map[string]interface{}{
 		"confidence": confidence,
-	})
-	if err != nil {
+	}); err != nil {
 		return err
 	}
-
-	// Relation: événement → cause
 	eventNodeID := fmt.Sprintf("event_%s", eventID)
 	edgeID := fmt.Sprintf("edge_%s_%s", eventID, cause)
-	err = kg.AddEdge(edgeID, eventNodeID, causeNodeID, "caused_by", confidence)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return kg.AddEdgeCat(CategoryBusiness, edgeID, eventNodeID, causeNodeID, "caused_by", confidence)
 }
 
-// AddCost ajoute un coût à un événement
+// AddCost — business enrichment
 func (kg *KnowledgeGraph) AddCost(eventID string, costEUR float64) error {
-	// Nœud coût
 	costNodeID := fmt.Sprintf("cost_%s", eventID)
-	err := kg.AddNode(costNodeID, "Cost", fmt.Sprintf("%.2f€", costEUR), map[string]interface{}{
+	if err := kg.AddNodeCat(CategoryBusiness, costNodeID, "Cost", fmt.Sprintf("%.2f€", costEUR), map[string]interface{}{
 		"amount_eur": costEUR,
-	})
-	if err != nil {
+	}); err != nil {
 		return err
 	}
-
-	// Relation: événement → coût
 	eventNodeID := fmt.Sprintf("event_%s", eventID)
 	edgeID := fmt.Sprintf("edge_cost_%s", eventID)
-	err = kg.AddEdge(edgeID, eventNodeID, costNodeID, "costs", 1.0)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return kg.AddEdgeCat(CategoryBusiness, edgeID, eventNodeID, costNodeID, "costs", 1.0)
 }
 
-// GetFullGraph retourne tout le graphe pour Cytoscape
+// GetFullGraph returns the entire graph (both categories). Legacy alias.
 func (kg *KnowledgeGraph) GetFullGraph() (*GraphJSON, error) {
-	// Récupérer tous les nœuds
-	rows, err := kg.store.DB().Query(`
-		SELECT id, type, label, properties, created_at FROM kg_nodes
-	`)
+	return kg.GetGraph("all")
+}
+
+// GetGraph — unified read. category = "business" | "platform" | "all" | "" (=all).
+func (kg *KnowledgeGraph) GetGraph(category string) (*GraphJSON, error) {
+	if category == "" {
+		category = "all"
+	}
+	nodeQuery := `SELECT id, category, type, label, properties, created_at FROM kg_nodes`
+	edgeQuery := `SELECT id, category, from_id, to_id, relation, weight, created_at FROM kg_edges`
+	var nodeArgs, edgeArgs []interface{}
+	if category != "all" {
+		nodeQuery += ` WHERE category = ?`
+		edgeQuery += ` WHERE category = ?`
+		nodeArgs = append(nodeArgs, category)
+		edgeArgs = append(edgeArgs, category)
+	}
+
+	// Nodes
+	rows, err := kg.store.DB().Query(nodeQuery, nodeArgs...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
 	var nodes []Node
 	for rows.Next() {
 		var n Node
 		var propsJSON string
-		err := rows.Scan(&n.ID, &n.Type, &n.Label, &propsJSON, &n.CreatedAt)
-		if err != nil {
+		if err := rows.Scan(&n.ID, &n.Category, &n.Type, &n.Label, &propsJSON, &n.CreatedAt); err != nil {
 			continue
 		}
 		if propsJSON != "" {
 			if err := json.Unmarshal([]byte(propsJSON), &n.Properties); err != nil {
-				log.Printf("[KG] Warning: failed to unmarshal properties: %v", err)
+				log.Printf("[KG] Warning: bad properties JSON on node %s: %v", n.ID, err)
 			}
 		}
 		nodes = append(nodes, n)
 	}
 
-	// Récupérer toutes les relations
-	edgeRows, err := kg.store.DB().Query(`
-		SELECT id, from_id, to_id, relation, weight, created_at FROM kg_edges
-	`)
+	// Edges
+	edgeRows, err := kg.store.DB().Query(edgeQuery, edgeArgs...)
 	if err != nil {
 		return nil, err
 	}
 	defer edgeRows.Close()
-
 	var edges []Edge
 	for edgeRows.Next() {
 		var e Edge
-		err := edgeRows.Scan(&e.ID, &e.FromID, &e.ToID, &e.Relation, &e.Weight, &e.CreatedAt)
-		if err != nil {
+		if err := edgeRows.Scan(&e.ID, &e.Category, &e.FromID, &e.ToID, &e.Relation, &e.Weight, &e.CreatedAt); err != nil {
 			continue
 		}
 		edges = append(edges, e)
@@ -217,53 +205,114 @@ func (kg *KnowledgeGraph) GetFullGraph() (*GraphJSON, error) {
 	return &GraphJSON{Nodes: nodes, Edges: edges}, nil
 }
 
-// Store retourne le storage sous-jacent
+// RepopulatePlatform wipes existing platform nodes/edges and rebuilds them from
+// the current pipeline registry. Call this whenever pipelines change.
+// This replaces the old 5-min-cached in-memory Technical KG.
+func (kg *KnowledgeGraph) RepopulatePlatform(reg *pipeline.Registry) error {
+	kg.platformMu.Lock()
+	defer kg.platformMu.Unlock()
+
+	// If nothing changed since last rebuild, no-op (fast path).
+	currentHash := reg.GetHash()
+	if currentHash == kg.lastRegHash && !kg.lastRebuilt.IsZero() {
+		return nil
+	}
+
+	// Wipe existing platform rows.
+	if _, err := kg.store.DB().Exec(`DELETE FROM kg_edges WHERE category = 'platform'`); err != nil {
+		return err
+	}
+	if _, err := kg.store.DB().Exec(`DELETE FROM kg_nodes WHERE category = 'platform'`); err != nil {
+		return err
+	}
+
+	// Build in-memory using the existing algorithm, then persist.
+	builder := NewTechnicalBuilder(reg)
+	graph := builder.Build()
+
+	for _, n := range graph.Nodes {
+		var propsJSON string
+		if n.Properties != nil {
+			b, _ := json.Marshal(n.Properties)
+			propsJSON = string(b)
+		}
+		_, err := kg.store.DB().Exec(
+			`INSERT OR REPLACE INTO kg_nodes (id, category, type, label, properties) VALUES (?, ?, ?, ?, ?)`,
+			n.ID, string(CategoryPlatform), string(n.Type), n.Name, propsJSON,
+		)
+		if err != nil {
+			log.Printf("[KG] Failed to insert platform node %s: %v", n.ID, err)
+		}
+	}
+	for _, e := range graph.Edges {
+		_, err := kg.store.DB().Exec(
+			`INSERT OR REPLACE INTO kg_edges (id, category, from_id, to_id, relation, weight) VALUES (?, ?, ?, ?, ?, ?)`,
+			e.ID, string(CategoryPlatform), e.From, e.To, string(e.Type), e.Weight,
+		)
+		if err != nil {
+			log.Printf("[KG] Failed to insert platform edge %s: %v", e.ID, err)
+		}
+	}
+
+	kg.lastRebuilt = time.Now()
+	kg.lastRegHash = currentHash
+	log.Printf("[KG] Platform sub-graph rebuilt (%d nodes, %d edges)", len(graph.Nodes), len(graph.Edges))
+	return nil
+}
+
+// ─── Legacy API preserved for existing callers ──────────────────────────────
+
+// Store returns the underlying storage.
 func (kg *KnowledgeGraph) Store() *storage.SQLiteStore {
 	return kg.store
 }
 
-// GetTechnicalGraph retourne le graphe technique complet
-func (kg *KnowledgeGraph) GetTechnicalGraph(pipelineReg *pipeline.Registry) (*TechnicalGraph, error) {
-	builder := NewTechnicalBuilder(pipelineReg)
-	return builder.Build(), nil
+// GetTechnicalGraph — legacy alias. Now sourced from the unified store.
+// Callers should migrate to GetGraph("platform"). This wrapper adapts to the
+// old TechnicalGraph shape for backward compat with cmd/agent code.
+func (kg *KnowledgeGraph) GetTechnicalGraph(reg *pipeline.Registry) (*TechnicalGraph, error) {
+	if reg != nil {
+		if err := kg.RepopulatePlatform(reg); err != nil {
+			log.Printf("[KG] Warning: platform repopulate failed: %v", err)
+		}
+	}
+	g, err := kg.GetGraph("platform")
+	if err != nil {
+		return nil, err
+	}
+	tg := &TechnicalGraph{}
+	for _, n := range g.Nodes {
+		tg.Nodes = append(tg.Nodes, TechnicalNode{
+			ID:         n.ID,
+			Type:       TechnicalNodeType(n.Type),
+			Name:       n.Label,
+			Properties: n.Properties,
+			CreatedAt:  n.CreatedAt,
+		})
+	}
+	for _, e := range g.Edges {
+		tg.Edges = append(tg.Edges, TechnicalEdge{
+			ID:     e.ID,
+			From:   e.FromID,
+			To:     e.ToID,
+			Type:   TechnicalEdgeType(e.Relation),
+			Weight: e.Weight,
+		})
+	}
+	return tg, nil
 }
 
-// GetTechnicalGraphWithCache retourne le graphe depuis le cache ou le recalcule
+// GetTechnicalGraphWithCache — legacy alias (cache logic removed since the
+// unified store IS the source of truth; RepopulatePlatform is idempotent).
 func (kg *KnowledgeGraph) GetTechnicalGraphWithCache(reg *pipeline.Registry) (*TechnicalGraph, error) {
-	currentKey := reg.GetHash()
-
-	kg.cacheMu.RLock()
-	cached := kg.cachedGraph
-	kg.cacheMu.RUnlock()
-
-	if cached != nil && cached.CacheKey == currentKey && time.Since(cached.Generated) < 5*time.Minute {
-		log.Printf("[KG] Returning cached graph (%d nodes, %d edges)",
-			len(cached.Graph.Nodes), len(cached.Graph.Edges))
-		return cached.Graph, nil
-	}
-	log.Printf("[KG] Cache miss, regenerating...")
-
-	builder := NewTechnicalBuilder(reg)
-	graph := builder.Build()
-
-	kg.cacheMu.Lock()
-	kg.cachedGraph = &CachedTechnicalGraph{
-		Graph:     graph,
-		Generated: time.Now(),
-		CacheKey:  currentKey,
-	}
-	kg.cacheMu.Unlock()
-
-	log.Printf("[KG] Cache updated (%d nodes, %d edges)", len(graph.Nodes), len(graph.Edges))
-	return graph, nil
+	return kg.GetTechnicalGraph(reg)
 }
 
-// PurgeCache vide le cache du graphe technique
+// PurgeCache — legacy no-op. Cache is gone; use RepopulatePlatform instead.
 func (kg *KnowledgeGraph) PurgeCache() {
-	kg.cacheMu.Lock()
-	kg.cachedGraph = nil
-	kg.cacheMu.Unlock()
-	log.Printf("[KG] Cache purged")
+	kg.lastRegHash = ""
+	kg.lastRebuilt = time.Time{}
+	log.Printf("[KG] Platform rebuild flag reset (next request will rebuild)")
 }
 
 // Close ferme la base

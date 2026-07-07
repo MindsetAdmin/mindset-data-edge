@@ -1,5 +1,5 @@
-id: t
-name: test
+id: p1
+name: pipeline1
 description: ""
 version: "1.0"
 enabled: true
@@ -9,13 +9,17 @@ trigger:
     function: opcua_read
     config:
         node_id: ns=3;i=1001
-        tags:
-            - ns=3;i=1001
-            - ns=3;i=1002
-            - ns=3;i=1003
         timeout: 5000
 nodes:
-    - id: add_to_dashboard_njjqy
+    - id: state_machine_7kazg
+      name: state_machine
+      type: transform
+      function: state_machine
+      config:
+        machine_id: machine1
+      depends_on:
+        - trigger
+    - id: add_to_dashboard_alhju
       name: add_to_dashboard
       type: output
       function: add_to_dashboard
@@ -23,5 +27,5 @@ nodes:
         kind: value
         label: Mon widget
       depends_on:
-        - trigger
-output: add_to_dashboard_njjqy
+        - state_machine_7kazg
+output: add_to_dashboard_alhju

@@ -35,29 +35,34 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	return &SQLiteStore{db: db}, nil
 }
 
-// initTables crée le schéma
+// initTables crée le schéma. Unified KG (2026-07-02 refactor): nodes + edges
+// carry a `category` column ("business" for site-fingerprint entities like
+// Equipment/Event/Cause/Cost; "platform" for pipeline-topology entities like
+// Pipeline/Function/Topic/Connection/Dashboard). Old schemas auto-migrate.
+//
+// Sequencing matters: for pre-refactor DBs, CREATE TABLE IF NOT EXISTS is a
+// no-op (the old schema without `category` is preserved). We must therefore
+// ALTER TABLE ADD COLUMN BEFORE any CREATE INDEX that references `category`.
 func initTables(db *sql.DB) error {
-	queries := []string{
-		// Table des nœuds du Knowledge Graph
+	// Step 1 — CREATE TABLE (new DBs get the unified schema; existing DBs keep their old one).
+	tableQueries := []string{
 		`CREATE TABLE IF NOT EXISTS kg_nodes (
 			id TEXT PRIMARY KEY,
+			category TEXT NOT NULL DEFAULT 'business',
 			type TEXT NOT NULL,
 			label TEXT NOT NULL,
 			properties TEXT,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
-
-		// Table des relations (edges)
 		`CREATE TABLE IF NOT EXISTS kg_edges (
 			id TEXT PRIMARY KEY,
+			category TEXT NOT NULL DEFAULT 'business',
 			from_id TEXT NOT NULL,
 			to_id TEXT NOT NULL,
 			relation TEXT NOT NULL,
 			weight REAL DEFAULT 1,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
-
-		// Table des événements
 		`CREATE TABLE IF NOT EXISTS events (
 			id TEXT PRIMARY KEY,
 			type TEXT NOT NULL,
@@ -69,21 +74,77 @@ func initTables(db *sql.DB) error {
 			timestamp DATETIME NOT NULL,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
-
-		// Index pour les recherches rapides
-		`CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp)`,
-		`CREATE INDEX IF NOT EXISTS idx_events_work_center ON events(work_center)`,
-		`CREATE INDEX IF NOT EXISTS idx_kg_nodes_type ON kg_nodes(type)`,
-		`CREATE INDEX IF NOT EXISTS idx_kg_edges_relation ON kg_edges(relation)`,
 	}
-
-	for _, q := range queries {
+	for _, q := range tableQueries {
 		if _, err := db.Exec(q); err != nil {
 			log.Printf("[STORAGE] Error creating table: %v", err)
 			return err
 		}
 	}
+
+	// Step 2 — Migration: for pre-refactor DBs, add the `category` column BEFORE
+	// creating indexes on it. SQLite's PRAGMA table_info() probe makes ALTER TABLE
+	// idempotent-safe.
+	if err := migrateAddCategoryColumn(db); err != nil {
+		log.Printf("[STORAGE] Migration warning: %v", err)
+		return err
+	}
+
+	// Step 3 — Indexes (now safe to reference `category` — column exists everywhere).
+	indexQueries := []string{
+		`CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp)`,
+		`CREATE INDEX IF NOT EXISTS idx_events_work_center ON events(work_center)`,
+		`CREATE INDEX IF NOT EXISTS idx_kg_nodes_type ON kg_nodes(type)`,
+		`CREATE INDEX IF NOT EXISTS idx_kg_nodes_category ON kg_nodes(category)`,
+		`CREATE INDEX IF NOT EXISTS idx_kg_edges_relation ON kg_edges(relation)`,
+		`CREATE INDEX IF NOT EXISTS idx_kg_edges_category ON kg_edges(category)`,
+	}
+	for _, q := range indexQueries {
+		if _, err := db.Exec(q); err != nil {
+			log.Printf("[STORAGE] Error creating index: %v", err)
+			return err
+		}
+	}
 	return nil
+}
+
+// migrateAddCategoryColumn adds the `category` column to legacy kg_nodes and
+// kg_edges tables. Existing rows default to 'business' which is safe because
+// pre-refactor DBs only contained business (Domain) KG entries.
+func migrateAddCategoryColumn(db *sql.DB) error {
+	for _, table := range []string{"kg_nodes", "kg_edges"} {
+		if hasCategoryColumn(db, table) {
+			continue
+		}
+		q := "ALTER TABLE " + table + " ADD COLUMN category TEXT NOT NULL DEFAULT 'business'"
+		if _, err := db.Exec(q); err != nil {
+			log.Printf("[STORAGE] Failed to add category to %s: %v", table, err)
+			return err
+		}
+		log.Printf("[STORAGE] Migrated %s: added category column", table)
+	}
+	return nil
+}
+
+func hasCategoryColumn(db *sql.DB, table string) bool {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dfltValue interface{}
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			continue
+		}
+		if name == "category" {
+			return true
+		}
+	}
+	return false
 }
 
 // Close ferme la base

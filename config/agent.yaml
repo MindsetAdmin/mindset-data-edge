@@ -6,7 +6,7 @@ site:
 #list of opc-ua endpoints to connect to
 opcua:
   name: "Prosys"
-  endpoint: "opc.tcp://localhost:53530/OPCUA/SimulationServer"
+  endpoint: "opc.tcp://localhost:53530/OPCUA/Server1"
   security_mode: "None"
   security_policy: "None"
   session_timeout_seconds: 300

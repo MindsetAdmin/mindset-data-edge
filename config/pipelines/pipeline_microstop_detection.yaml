@@ -9,14 +9,14 @@ trigger:
     function: mqtt_subscribe
     config:
         qos: 1
-        topic: mindset/raw/ns=3;i=1014
+        topic: mindset/events/status-change
 nodes:
     - id: state_machine
       name: State Machine
       type: transform
       function: state_machine
       config:
-        machine_id: machine1
+        machine_id: mqchine2
       depends_on:
         - trigger
     - id: duration

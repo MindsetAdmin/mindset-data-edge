@@ -289,29 +289,48 @@ Currently registered (11 in `cmd/server`, 6 in `cmd/agent`):
 
 ---
 
-## 9. Knowledge Graph — two distinct graphs
+## 9. Knowledge Graph — one unified graph, two categories
 
-### Domain KG (persistent, SQLite)
-`internal/kg/graph.go` + `internal/kg/subscriber.go`.
+**Refactored 2026-07-02** (see `docs/analysis_log.md` Entry 50). Previously the code had a Domain KG (persistent SQLite) and a Technical KG (in-memory, 5-min cached). They were merged into a single unified KG.
 
-**Nodes**: Equipment · Event · Cause · Cost.
-**Edges**: relations between them (which event on which equipment, what cause, what cost).
+### Unified KG (persistent, SQLite)
 
-**Enrichment**: `KGSubscriber` listens to `mindset/events/micro-stop` and writes into the graph automatically.
+`internal/kg/graph.go` + `internal/kg/subscriber.go` + `internal/kg/builder.go`.
 
-**Access**: `GET /api/kg/domain` — returns JSON for Cytoscape rendering.
+**Storage**: SQLite tables `kg_nodes` (id, **category**, type, label, properties JSON) and `kg_edges` (id, **category**, from_id, to_id, relation, weight). Both tables gained a `category` column.
 
-**Storage**: SQLite tables `kg_nodes` (id, type, label, properties JSON), `kg_edges` (id, from_id, to_id, relation, weight).
+**Every node and edge is tagged with a category:**
 
-### Technical KG (in-memory)
-`internal/kg/builder.go`.
+| Category | What lives here | Populated by |
+|---|---|---|
+| `business` | Equipment · Event · Cause · Cost · Operator · OF · Product · Recipe … | `KGSubscriber` listening to `mindset/events/micro-stop` (auto) + `kg_save` output function (manual) |
+| `platform` | Connection · Topic · Function · Pipeline · Dashboard | `KnowledgeGraph.RepopulatePlatform(registry)` — wipes+rebuilds when pipelines change |
 
-**Nodes**: Connection · Function · Topic · Pipeline · Dashboard.
-**Edges**: computed from pipeline definitions — which functions each pipeline uses, which topics it consumes/produces, which dashboards use it.
+**Cross-category edges are legal.** Example: a `Dashboard` platform node has an edge (`subscribes_to`) to a `Topic` platform node, which is `produced_by` a `Pipeline`, which processes `Event` business nodes from `Equipment`. AI agents can traverse across categories via MCP.
 
-**Rebuild trigger**: cache expires every 5 minutes OR the registry hash changes. Empty until at least one pipeline is registered.
+### Access
 
-**Access**: `GET /api/kg/technical`.
+Single unified endpoint plus legacy aliases (both still work):
+
+| Route | What it returns |
+|---|---|
+| `GET /api/kg?category=business` | Only site fingerprint (Equipment/Event/Cause/Cost/…) |
+| `GET /api/kg?category=platform` | Only pipeline topology (Connection/Topic/Function/Pipeline/Dashboard) |
+| `GET /api/kg?category=all` (or omit) | Both, in one graph |
+| `GET /api/kg/domain` | Legacy alias → `category=business` |
+| `GET /api/kg/technical` | Legacy alias → `category=platform` |
+
+Returns JSON for Cytoscape rendering. Both nodes and edges carry a `category` field so the frontend can style them differently.
+
+### Why unified
+
+Aligns with:
+- **Prop #7** — KG/UNS as the single trusted source for AI agents (one endpoint, one schema)
+- **Prop #9** — pipeline updates automatically appear in "THE KG" (no more distinguishing "which KG?")
+- **Impact Engine + Moat #3** — the cumulative site fingerprint has one home
+- **MCP tools** — `kg_query`, `kg_list_events`, `kg_cost_summary` all target one graph
+
+**Platform sub-graph rebuild** happens lazily on `GET /api/kg?category=platform|all` OR eagerly when pipelines are registered/deregistered. Replaces the old 5-min cache. No more "Technical KG is stale."
 
 ---
 

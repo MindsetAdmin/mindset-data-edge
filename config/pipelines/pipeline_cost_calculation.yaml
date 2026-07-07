@@ -18,7 +18,6 @@ nodes:
       config:
         currency: EUR
         hourly_rate: 85
-        rate_source: tag
       depends_on:
         - trigger
     - id: mqtt_publish

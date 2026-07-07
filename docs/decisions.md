@@ -10,6 +10,32 @@
 
 ---
 
+### Knowledge Graph: merged into ONE unified graph with category tags (was 2 KGs)
+
+**Decision (2026-07-02):** The previous split between "Domain KG" (persistent site fingerprint) and "Technical KG" (in-memory pipeline topology) is REMOVED. There is now **one Knowledge Graph** persisted in SQLite. Every node and edge carries a `category` tag: `business` (Equipment, Event, Cause, Cost, Operator, OF, Product, …) or `platform` (Connection, Topic, Function, Pipeline, Dashboard).
+
+The unified API is `GET /api/kg?category=business|platform|all`. Legacy `/api/kg/domain` and `/api/kg/technical` are preserved as aliases mapping to `?category=business` and `?category=platform` respectively.
+
+**Rationale:**
+- Aligns with the "single trusted source for AI agents" principle (Prop #7 in `Prpopsitions1.md`) — one endpoint, one schema, one MCP tool surface
+- Enables cross-category queries via a single graph traversal (e.g. *"which pipelines produce cost data for Line 2?"*)
+- Removes the mental model confusion — "which KG?" — from user + investor + developer conversations
+- Consolidates cache logic (the 5-min in-memory cache for the Technical KG is gone; platform sub-graph is rebuilt on pipeline register/deregister, then queried from SQLite like any other data)
+- Simplifies the Impact Engine's data access (Entry 40)
+
+**Trade-off accepted:** Platform sub-graph is now persisted in SQLite (was in-memory only). Adds a few kB per pipeline to the SQLite footprint — negligible.
+
+**Backwards compatibility:** Legacy Go API (`GetFullGraph`, `GetTechnicalGraph`, `PurgeCache`) preserved as aliases. Legacy REST endpoints preserved. Old databases auto-migrate via `ALTER TABLE ADD COLUMN category` (SQLite idempotent-safe).
+
+**Alternatives rejected:**
+- Keep two KGs, rename Technical KG to "Platform Topology" (Option B in Entry 49) — clarifies the mental model but doesn't unlock cross-category queries
+- Delete Technical KG entirely (Option C in Entry 49) — loses the pipeline-topology view which is useful for debugging and investor demos
+
+---
+
+
+---
+
 ### Target market: 15K+ EU mid-sized factories TAM, initial GTM focus on 4 high-value verticals
 
 **Decision:** MindSet's total addressable market is **15,000+ European mid-sized factories**. Initial go-to-market focus is **4 high-value verticals**:

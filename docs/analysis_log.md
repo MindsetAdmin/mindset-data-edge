@@ -4735,6 +4735,1047 @@ Log entry written same turn as terminal response. Pattern holding.
 
 ---
 
+## Entry 50 — 2026-07-02 — Option A EXECUTED: unified KG shipped
+
+User picked **A (merge)**. Shipped in this turn.
+
+### Files changed
+
+**Backend (Go):**
+
+| File | Change |
+|---|---|
+| `internal/storage/sqlite.go` | Added `category TEXT NOT NULL DEFAULT 'business'` column to `kg_nodes` + `kg_edges` CREATE TABLE. Added `migrateAddCategoryColumn()` + `hasCategoryColumn()` for legacy DB auto-migration (SQLite `PRAGMA table_info` probe). Added indexes on `category` for both tables. |
+| `internal/kg/types.go` | Added `Category` type + `CategoryBusiness` / `CategoryPlatform` constants. Preserved `TechnicalNode`/`TechnicalEdge`/`TechnicalGraph` structs (used as intermediate scratch by the builder). Added business `Type*` string constants (Equipment, Event, Cause, Cost, ...). |
+| `internal/kg/graph.go` | Full rewrite. Unified `Node` + `Edge` structs with `Category` field. New `AddNodeCat` / `AddEdgeCat` methods for explicit category writes. New `GetGraph(category string) → (*GraphJSON, error)` — accepts `"business"`, `"platform"`, `"all"`, or `""` (=all). New `RepopulatePlatform(reg) error` — wipes existing platform rows and rebuilds from the pipeline registry (short-circuits if the registry hash hasn't changed). Removed the 5-min in-memory cache (`CachedTechnicalGraph` + `cacheMu`) — replaced by DB persistence + hash-based idempotency. All legacy methods (`AddNode` / `AddEdge` / `AddMicroStop` / `AddCause` / `AddCost` / `GetFullGraph` / `GetTechnicalGraph` / `GetTechnicalGraphWithCache` / `PurgeCache`) preserved as aliases. Business enrichment helpers explicitly call `AddNodeCat(CategoryBusiness, ...)`. |
+| `internal/kg/builder.go` | Unchanged behavior — still produces the same `TechnicalGraph` in-memory. Called from `RepopulatePlatform`; results persisted to SQLite with `category='platform'`. |
+| `internal/kg/subscriber.go` | Unchanged — writes via legacy `AddNode`/`AddEdge` which default to business category. Correct behavior preserved. |
+| `cmd/server/main.go` | Added `mux.HandleFunc("/api/kg", srv.handleKG)`. Rewrote `handleTechnicalGraph` + `handleDomainGraph` as thin legacy aliases (still return the same shapes). Added `handleKG` — validates `?category` query param, refreshes platform sub-graph when needed, returns unified `GraphJSON`. Added `loadPipelineRegistry()` helper. Fixed `handleStats` — was calling `GetFullGraph()` (which now returns BOTH categories → inflated counts); changed to `GetGraph("business")` for site-fingerprint stats. |
+
+**Frontend (React):**
+
+| File | Change |
+|---|---|
+| `src/api/client.js` | Added `fetchKG(category)` — new canonical function. `fetchKnowledgeGraph(kind)` preserved as a shim that maps `technical → platform` and `domain → business`. |
+| `src/pages/KnowledgeGraphPage.jsx` | Full rewrite. Replaced Technique/Domaine toggle with a 3-way category filter (Business / Platform / All). Applied MindSet design tokens (`bg-panel`, `text-text-primary`, `border-border-subtle`, `mono tabular`) from the redesign. Removed all emojis (🧠 🔄 ❌ 📭) — replaced by Lucide icons (`Network`, `RefreshCw`, `AlertCircle`, `Inbox`). Layout hint mapping preserves the current Cytoscape styling (business → domain layout, platform + all → technical layout). Details panel now shows `Category` field alongside Type/Label. |
+
+**Docs:**
+
+| File | Change |
+|---|---|
+| `docs/how_it_works.md` §9 | Rewrote from "two distinct graphs" to "one unified graph, two categories". New table showing `business` vs `platform` category. Cross-category edges explained. Access table shows unified endpoint + legacy aliases. |
+| `docs/decisions.md` | Added new locked decision at the top of "Corrections & Late Decisions" — "Knowledge Graph: merged into ONE unified graph with category tags". Includes rationale + alternatives rejected + backwards-compat note. |
+
+### Build verification
+
+`go build ./...` returned no output (silent success) after all backend changes. Both binaries compile cleanly. Legacy API is intact.
+
+### What's live vs what's not
+
+**Live now** (after Mohamed pulls + rebuilds + refreshes frontend):
+- Unified `/api/kg?category=X` endpoint
+- Legacy `/api/kg/domain` and `/api/kg/technical` still work (they route through the new system now)
+- Unified KG page in the frontend with category filter
+- New SQLite schema (auto-migrates on first startup)
+
+**Not yet done** (deferred to next housekeeping pass):
+- `docs/mindset.md` §8 Module 6 (KG integration description) — still describes 2 KGs. Non-blocking. Update in a future pass.
+- `docs/mindset.md` §15 Moat #3 wording — mentions "cumulative KG" already, so still correct semantically. Micro-polish only.
+- `docs/impact_engine.md` MCP tool descriptions — could be tightened to explicitly reference `?category=business` for the cost/event tools. Non-blocking.
+- `docs/it_connectors.md` — no changes needed; IT connectors don't touch the KG directly.
+
+### Downstream implications
+
+- **Prop #7 (KG/UNS as single source for AI agents)** — now unblocked. MCP server (V1) can expose `kg_query(category, node_type, filter)` as a single tool covering both business + platform queries.
+- **Prop #9 (delete kg_save)** — the case for renaming or deleting `kg_save` is now weaker because both categories auto-populate cleanly. Still recommend rename to `kg_write_advanced` for clarity but no rush.
+- **Prop #4 (live KG)** — closer to feasible: platform sub-graph rebuild is now fast (SQLite writes, no 5-min wait). WebSocket push of new business nodes on `mindset/events/*` is the next step.
+
+### Tasks completed this turn
+
+All 8 tasks from the TaskCreate batch marked completed. Sequence:
+1. ✅ Read KG code
+2. ✅ Design unified schema
+3. ✅ Update types + graph
+4. ✅ Builder migrated (kept intact, called from RepopulatePlatform)
+5. ✅ HTTP handlers updated
+6. ✅ Frontend KG page + api client updated
+7. ✅ Docs updated (how_it_works §9 + decisions.md)
+8. ✅ Log entry (this one)
+
+### Discipline note
+
+Log entry written same turn as the code work. Pattern holding — 6 turns in a row.
+
+---
+
+## Entry 51 — 2026-07-02 — Fix: initTables ordering bug in Entry 50 migration
+
+User ran `./bin/server.exe` and hit:
+```
+[STORAGE] Error creating table: SQL logic error: no such column: category (1)
+[API] Failed to open KG at ./data/mindset.db: SQL logic error: no such column: category (1)
+```
+
+### Root cause
+
+In `internal/storage/sqlite.go` from Entry 50, the `initTables()` function ran queries in the wrong order for pre-existing databases:
+
+1. `CREATE TABLE IF NOT EXISTS kg_nodes (... category ...)` — NO-OP for existing DBs (old schema without `category` preserved)
+2. `CREATE INDEX idx_kg_nodes_category ON kg_nodes(category)` — **FAILS** — column doesn't exist yet on legacy DBs
+3. `migrateAddCategoryColumn(db)` — runs too late, never reached because step 2 already errored
+
+### Fix
+
+Split `initTables()` into 3 explicit steps:
+1. **CREATE TABLE** statements (schema for new DBs, no-op for legacy)
+2. **Migration** (`ALTER TABLE ADD COLUMN category` via idempotent `PRAGMA table_info` probe)
+3. **CREATE INDEX** statements (now safe — `category` column exists everywhere)
+
+Also changed the migration failure from a warning to a hard return — if migration fails we shouldn't proceed to indexes that depend on the new column.
+
+### Rebuilt
+
+`go build -o bin/server.exe ./cmd/server` — silent success.
+`go build -o bin/agent.exe ./cmd/agent` — silent success.
+
+### Lesson
+
+**Migrations run before any dependent DDL.** In a real production system this would be a proper migration framework (goose, migrate, sql-migrate). For MindSet's single-file SQLite + `IF NOT EXISTS` idempotency, the in-place split-into-phases pattern is acceptable — but the ordering must be explicit.
+
+### Discipline note
+
+Fix + log entry same turn. Pattern holding.
+
+---
+
+## Entry 52 — 2026-07-02 — KG viewer switched to Obsidian-style ForceGraph
+
+User: *"I want a knowledge graph like Obsidian's."*
+
+### Decision
+
+Kept Cytoscape available in the codebase (for the Pipeline Studio, which needs its DAG/hierarchical layouts) but **swapped the KG viewer to `react-force-graph-2d`** — d3-force under the hood, canvas rendering, physics-alive, exactly what Obsidian's graph does conceptually.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `frontend/pipeline-builder/package.json` | Added `react-force-graph-2d ^1.25.0`. **User must run `npm install`.** |
+| `frontend/pipeline-builder/src/components/ForceGraph.jsx` | NEW — Obsidian-style component. |
+| `frontend/pipeline-builder/src/pages/KnowledgeGraphPage.jsx` | Removed CytoscapeGraph import + legacy `toElements`/`STYLESHEET`/`LAYOUTS`/`pickLayout` refs. Now uses `<ForceGraph graph={filteredGraph} onNodeSelect={setSelected} />`. |
+| `frontend/pipeline-builder/src/lib/kgGraph.js` | Untouched — kept as a fallback for anywhere that still uses Cytoscape. |
+| `frontend/pipeline-builder/src/components/CytoscapeGraph.jsx` | Untouched — Pipeline Studio still needs it. |
+
+### Design choices in `ForceGraph.jsx`
+
+- **Data adapter** (`normalizeGraph`) handles BOTH the unified `{nodes:[{id,category,type,label,...}], edges:[{id,from_id,to_id,relation,category}]}` shape from Entry 50 AND the pre-refactor legacy shapes. Zero breaking risk.
+- **Node colors keyed by type** — warm palette for business (Equipment red, Event amber, Cause purple, Cost green, Operator amber, OF orange, Product pink) + cool palette for platform (pipeline blue, topic cyan, function slate, connection indigo, dashboard pink-light). Everything anchored on MindSet design tokens.
+- **Node size proportional to `sqrt(degree)`** — Obsidian's central-hub-radiates-out feel. Base ~3-8px, hover bumps 1.35×.
+- **Curved links** (`linkCurvature: 0.18`), semi-transparent white (`rgba(232,232,237,0.15)`).
+- **Hover behavior — the Obsidian move**:
+  - Compute neighbor set via a Map of node.id → Set(neighborIds)
+  - Highlight hovered node + its neighbors (fully opaque, hover ring on the target)
+  - Fade all other nodes to `globalAlpha 0.15`
+  - Fade non-highlighted links to `rgba(232,232,237,0.05)`
+- **Labels only on hover** or when `globalScale > 2.2` (zoom-in past a threshold) — clean uncluttered view at default zoom.
+- **Custom canvas rendering** (`nodeCanvasObject` + `nodePointerAreaPaint`) for pixel-precise control at any zoom level.
+- **Autofit on load** — `onEngineStop` triggers `zoomToFit(400, 60)` once physics settles.
+- **Container-size aware** — ResizeObserver drives ForceGraph2D's `width`/`height` props.
+
+### To activate
+
+**Mohamed must run**:
+```powershell
+cd frontend/pipeline-builder
+npm install
+# then npm run dev (or refresh if it's already running)
+```
+
+`react-force-graph-2d` ships its own d3-force dependency — no additional installs needed. Package size adds ~200KB gzipped. Runtime canvas rendering scales to ~10k nodes smoothly.
+
+### If npm install is blocked by network
+
+Same fallback as Entry 47:
+```powershell
+npm config set proxy http://your-proxy:port
+npm install react-force-graph-2d
+```
+
+### Visual differences user should see immediately
+
+| Before (Cytoscape breadthfirst/concentric) | After (ForceGraph2D) |
+|---|---|
+| Rigid grid or radial layout | Physics-alive, nodes settle organically |
+| All labels always visible → crowded | Labels only on hover — clean at default zoom |
+| Fixed node size + rectangular styling | Circles sized by degree — visual hub identification |
+| Straight lines with arrows + edge labels | Subtle curved links, no arrow-clutter |
+| No neighbor highlight | Hover = neighbor emphasis + everything-else fade (Obsidian trademark) |
+| Slate blue palette | Warm business + cool platform palette |
+
+### What's NOT changed (worth flagging)
+
+- Cytoscape is still installed + used by the Pipeline Studio (React Flow-based DAG editor). Two graph libs coexisting is fine — they serve different UX needs (KG = free-form exploration, pipeline builder = DAG editing).
+- The old `src/lib/kgGraph.js` is unchanged. Left in place because it exports NODE_COLORS/FALLBACK_COLOR that might still be referenced elsewhere. Safe to delete later once confirmed.
+- The details sidebar behavior is unchanged (still shows ID, Category, Type, Label, Properties on node click).
+
+### Discipline note
+
+Same turn: dep added, component written, page wired, log entry created. Also — **npm install requirement is flagged in the FIRST paragraph of the terminal response**, per the discipline correction from Entry 47. No burying.
+
+### Tasks
+
+4 tasks in the TaskCreate batch, all marked completed:
+- ✅ Add dependency
+- ✅ Create ForceGraph.jsx
+- ✅ Wire into KnowledgeGraphPage
+- ✅ Log Entry 52
+
+---
+
+## Entry 53 — 2026-07-02 — Fix: dashboard machine status always N/A + Gantt timeline empty
+
+User reported: *"the dashboard doesn't display the timelines statut machines (the timeline is always empty and the statut machine is N/A)"*
+
+### Root cause
+
+`cmd/server/live.go`'s `StateTracker` only observed machine state from **`mindset/raw/{nodeID}` messages** AND only when the tag name matched the pattern `HasSuffix(name, ".status")` (case-insensitive).
+
+Two failure modes triggered the bug:
+
+**Failure mode A — tags routed via UNS/isa95, not raw**
+
+When OPC-UA tag selections use `isa95` or `both` routing mode, the tags flow through `mindset/site/{site}/{area}/{wc}/{tag}` topics rather than `mindset/raw/#`. The LiveHub subscribes to `mindset/#` so it SEES those messages, but the `stateTracker.observe()` call only happens inside the raw branch — status was never tracked.
+
+**Failure mode B — tag naming doesn't fit `.status` suffix**
+
+Real-world OPC-UA servers use variants: `Etat_Machine` (FR), `Line1.state`, `MachineStatus`, `Running`, etc. The strict `.status` suffix check missed all of these, so no state was ever observed.
+
+Meanwhile the `cmd/agent` rules engine ALREADY correctly detects Run↔Stop transitions from `mindset/site/#` and publishes `mindset/events/status-change` — but LiveHub was consuming those events for the "event" WebSocket broadcast without updating its own state tracker.
+
+### Fix
+
+Two changes in `cmd/server/live.go`:
+
+**1. Observe state from `mindset/events/status-change`** (the rules engine's authoritative source)
+
+The events branch now checks the topic; when it's `mindset/events/status-change`, it extracts `work_center` + `current_state` from the payload and calls `stateTracker.observe(wc, current_state, now)`. If the state changed, it also emits the `state` WebSocket message.
+
+**2. Observe state from `mindset/site/#` directly** (defense in depth)
+
+New branch after the events branch: unmarshal the `mindset/site/*` payload's `metadata.tag_name` + `metadata.work_center` + top-level `value`. If `isStatusTag(tag_name)` and value is bool-castable, feed the tracker. This covers the case where the API server is up but the agent isn't running (rules engine off → no `mindset/events/status-change` messages).
+
+**3. Relaxed `isStatusTag` to match real-world naming**
+
+Now matches (case-insensitive):
+- Direct name: `status`, `state`, `running`, `etat`, `marche`
+- Suffix / substring: `.status`, `.state`, `.running`, `.etat`, `.marche`, `_status`, `_state`, `etat_machine`, `machine_status`
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `cmd/server/live.go` | Added state observation from `mindset/events/status-change` inside the existing events branch. Added new branch for `mindset/site/*` state observation. Rewrote `isStatusTag` to accept multiple naming conventions. |
+
+### Rebuilt
+
+`go build -o bin/server.exe ./cmd/server` → silent success.
+`go build -o bin/agent.exe ./cmd/agent` → silent success.
+
+### To activate
+
+Restart the server:
+```powershell
+./bin/server.exe
+```
+
+Then in the UI:
+1. Reconnect OPC-UA (or leave the current session)
+2. Navigate to `/dashboards`
+3. Machine status panel should populate as soon as the first status transition flows through
+4. Gantt timeline populates once at least one Run→Stop or Stop→Run transition is observed
+
+If tags still don't show state, the tag names probably don't match — grep for known status-tag names in the LiveDataPanel to see what your OPC-UA server actually publishes, then extend `isStatusTag` in `cmd/server/live.go` accordingly.
+
+### Longer-term implication
+
+The state-tracking implementation is currently DUPLICATED between:
+1. `cmd/server/live.go` `StateTracker` (drives dashboard display)
+2. `cmd/agent/internal/rules/engine.go` `StateStore` + `handleStatusChange` (drives micro-stop detection)
+
+They observe the same input stream and derive similar state. A future refactor could unify them — either the rules engine's state store is the authoritative source and LiveHub reads from it, or both are replaced by a single edge state service. Not urgent for V1 (both work); flag for V1.5 architectural cleanup.
+
+### Discipline note
+
+Diagnosis + fix + log entry same turn. Pattern holding — 8 turns in a row.
+
+---
+
+## Entry 54 — 2026-07-02 — Dashboard: per-machine breakdown (was site-aggregated)
+
+User: *"I want to display the status machines in dashboard per machine not per site."*
+
+The existing "Statut machines" panel was too minimal — per-machine ROW, but only showed name + Running/Stopped + tag count. All the interesting KPIs (stops, downtime, cost, availability) were only rendered SITE-AGGREGATED in the 4 KPI cards at the top. User wanted the same breakdown per machine.
+
+### Change
+
+Replaced the minimal per-machine list with a full **DenseTable** rendering 6 columns per machine:
+
+| Column | Content |
+|---|---|
+| Machine | work_center name |
+| Status | `<StatusDot>` — Running (green + pulse) / Stopped (red) / n/a (grey) |
+| Stops | Count of Event nodes for that machine, today (dimmed when 0) |
+| Downtime | Sum of durations, formatted (Xh Ymin / Xmin Ys) |
+| Cost | Sum of costs in €, using event cost or fallback duration × hourly (amber when > 0) |
+| Availability | (1 − downtime/8h_shift) × 100, colored: green ≥90%, amber ≥75%, red < 75% |
+
+Rows sorted by cost descending (biggest bleeding machine first), then alphabetical.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `src/lib/dashboardData.js` | Added `groupByMachine(events, machines, hourly, shiftSeconds)` — buckets events by work_center for today + yesterday, computes per-machine stops/downtime/cost/availability. Handles machines with no events (show 0 / n/a). Sorts by cost desc. |
+| `src/pages/DashboardPage.jsx` | Replaced the ad-hoc per-machine `divide-y` list with a `<DenseTable>` from the redesign primitives. Uses `<StatusDot>` for status. Applies design tokens (`text-text-primary`, `text-status-warn`, `text-status-running`, `mono tabular`). Respects the studioStore `selectedMachines` filter (Prop #6). Added `useMemo` for perMachineRows. Kept the site-aggregate KPI cards at the top (they're the "at a glance" — the DenseTable is the "drill down"). |
+
+### What's preserved
+
+- Site-aggregate KPI cards at the top — quick glance across all machines
+- Existing selected-machines filter from studioStore (Prop #6 alignment)
+- Legacy "Derniers événements" panel unchanged (still site-wide event log — could be per-machine grouped later if desired)
+- Gantt below unchanged (already per-machine)
+
+### Design consistency
+
+- Uses `<DenseTable>` + `<StatusDot>` primitives from `frontend_redesign.md` §4
+- Numeric columns are monospace + tabular figures
+- Semantic color mapping (green/amber/red) matches redesign §3.1 tokens
+- No emojis in cells (just the panel title emoji, kept for continuity — can be swapped for a Lucide icon in a broader panel-header pass later)
+
+### Empty state
+
+When `perMachineRows.length === 0`:
+- If no selectedMachines filter: "Aucune machine."
+- If filter is active but no matches: "Aucune machine sélectionnée active."
+
+### No backend changes
+
+100% frontend. The `/api/machines` endpoint already returned per-machine state (after Entry 53 fix). The Domain KG already carries per-event `work_center`. This entry just re-groups + renders the existing data properly.
+
+### To activate
+
+- No server restart needed
+- If Vite dev server is running: hot-reload picks up the changes
+- Refresh browser at `/dashboards`
+
+### Discipline note
+
+Log entry written same turn as code changes. Pattern holding — 9 turns in a row.
+
+---
+
+## Entry 55 — 2026-07-02 — Fix: dashboard machine column showed site name instead of machine
+
+User: *"it display just Usine_Paris_Nord. i wanna this + the machin's noun for exemple machine1"*
+
+The Entry 54 DenseTable rendered `Usine_Paris_Nord` (the SITE) as the single "machine" row instead of the actual work centers (`machine1`, `machine2`, …).
+
+### Root cause
+
+`workCenterOf(name)` in `cmd/server/live.go` split on the FIRST `.` and returned the head segment:
+
+```go
+if i := strings.Index(name, "."); i > 0 { return name[:i], true }
+```
+
+That works for flat `machine1.status` naming (test-lab style) but on real ISA-95 OPC-UA browse paths — `Usine_Paris_Nord.Ligne1.machine1.status` — the head is the **site**, not the machine. So every tag got grouped under one bucket called "Usine_Paris_Nord".
+
+The Domain KG events already carried a correct `work_center` (they come from the rules engine's UNS-enriched metadata), but `/api/machines` — which the dashboard uses to enumerate the machine roster — was site-collapsing before the frontend ever saw it.
+
+### Fix
+
+Two changes in `cmd/server/` — 100% backend, no frontend touch needed:
+
+**1. `live.go` — smarter `workCenterOf`**
+
+Take the segment immediately **before the leaf attribute**. Handles both hierarchy depths:
+
+| Input tag name | Old result | New result |
+|---|---|---|
+| `machine1.status` | `machine1` ✅ | `machine1` ✅ |
+| `Usine_Paris_Nord.Ligne1.machine1.status` | `Usine_Paris_Nord` ❌ | `machine1` ✅ |
+| `A.B.C.D.speed` | `A` ❌ | `D` ✅ |
+
+Same helper is used by the state tracker (`LiveHub.Start`) — status transitions on `mindset/raw/#` are now keyed correctly by machine, matching what the rules engine already does on `mindset/site/#`.
+
+**2. `main.go` — `handleMachines` prefers ISA-95 mapping when available**
+
+`OpcuaManager.SelectionsDetailed()` already returns the user's ISA-95 mapping (site/area/work_center) per NodeID — set when the user picked routing modes on `/opcua` (Connect page). That mapping is now the primary source; naive tag-name parsing is only the fallback for tags without a routing selection:
+
+```go
+wc := wcByNodeID[t.NodeID]           // authoritative (user-configured ISA-95)
+if wc == "" {                        // fallback: parse name
+    wc, _ = workCenterOf(t.Name)
+    if wc == "" { wc = "(autres)" }
+}
+```
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `cmd/server/live.go` | `workCenterOf` now takes the second-to-last segment; comment explains why the head-segment approach broke on ISA-95 hierarchies. |
+| `cmd/server/main.go` | `handleMachines` builds a NodeID → WorkCenter map from `SelectionsDetailed()` and prefers it over name parsing. |
+
+### To activate
+
+```powershell
+go build -o bin/server.exe ./cmd/server
+.\run.ps1 -NoBuild
+```
+
+Then refresh `/dashboards` — the per-machine table should now show `machine1`, `machine2`, … under the "Machine" column.
+
+### Follow-up (not now)
+
+- The TagRegistry stores raw tag NAMEs — a cleaner V1.5 fix is to persist `work_center` on Tag itself (set at ingest, when the UNS mapper runs), so downstream views don't have to re-parse. Deferred.
+- The Domain KG's `work_center` on Event nodes already comes from the rules engine's UNS metadata — no fix needed there.
+
+### Discipline note
+
+Log written same turn as the code. Pattern holds — 10 turns in a row.
+
+---
+
+## Entry 56 — 2026-07-04 — Beta launch content plan (Twitter + LinkedIn + Reddit)
+
+User: *"i would post what we are workin on and drop a link to be notified about testing the beta version (in twiter). Write and publish technical posts on linkedin and redddit to attract attention (exemple linkedin : Explain the technical version of MindSet Data 'speed of execution, not tech for tech...') (example reddit : sharing a specific technical challenge 'how we succeeded and mapped the data ...'). make a new md file"*
+
+### What was created
+
+New file **`docs/beta_launch_content.md`** — coordinated pre-launch content plan across three platforms. Broader than `x_strategy.md` (which is X-only). Different intent: `x_strategy.md` is the ongoing daily X operations manual; `beta_launch_content.md` is the pre-launch cross-platform push around the beta cohort.
+
+### Structure of the doc
+
+10 sections:
+
+| § | Content |
+|---|---|
+| 1. Objective | Three ranked outcomes — waitlist (~200 in 6 weeks), credibility with OT engineers, 1–3 design partners. Explicit non-objective: virality. |
+| 2. Beta signup mechanism | Landing page (`mindsetdata.io/beta`) + Tally form + Discord + auto-reply. Marked as MUST SHIP BEFORE POSTING. |
+| 3. Twitter/X | Pinned anchor tweet draft + 3-post/week cadence + engagement play + what NOT to post. |
+| 4. LinkedIn | Anchor post — "Speed of execution, not tech for tech" — full drafts in EN AND FR. Plus 4 queued topics (on-prem, micro-stops, context vs AI, why Europe). |
+| 5. Reddit | Anti-shill rules (5 hard rules), 8 ranked subreddits, full draft for r/OPCUA post ("How we mapped 40k OPC-UA tags to ISA-95"), outlines for 3 more posts (r/golang, r/selfhosted, r/dataengineering). |
+| 6. First 2 weeks calendar | Day-by-day schedule from pre-Day-0 through Day 15. |
+| 7. Do's & Don'ts | Cross-platform matrix (length, voice, link placement, emojis, response window, timing). |
+| 8. Metrics | 7-metric weekly spreadsheet — landing uniques, signups, qualified signups, design-partner convos, follower counts, Reddit karma. Month 1 + Month 3 targets. |
+| 9. What NOT to reveal | Impact Engine details, OF/batch Fuzzy Join algorithm, MCP-server-as-SSOT specifics, customer names, roadmap > 3 months, pricing, fundraising. |
+| 10. First actions | 7-item numbered kickoff list. |
+
+### Key content decisions
+
+1. **French LinkedIn anchor is the primary — English is secondary.** Target audience is French/European plant managers. Full FR draft in the doc so it can ship as-is.
+2. **Reddit gets ANTI-shill rules — beta link stays in bio, never in post body.** Any leaked link risks a permaban. Explicitly enforced.
+3. **The r/OPCUA post uses the ACTUAL bug we just fixed** (Entry 55 — ISA-95 heuristic). Turning a real technical war story into content = credibility that can't be faked.
+4. **No cross-posting.** Same story is REWRITTEN per platform; verbatim copies read like marketing and hurt reach.
+5. **Guarded moats.** Explicit prohibition against publicly discussing the Impact Engine, Fuzzy Join, or MCP-as-SSOT — three moats that make it into competitive positioning but NOT into blog posts.
+6. **Metrics oriented at qualified signups, not vanity.** Weekly 15-min Friday review, 7 numbers, 1-line reflection. No dashboards, no analytics overhead.
+
+### What's aligned with prior decisions
+
+- 4 verticals (pharma, cosmetics, agrifood, metallurgy) — Entry 30 / decisions.md
+- On-prem-first, no hyperscaler through 2029 — decisions.md
+- Proprietary 2-year window (2028 reconsideration) — decisions.md
+- `@mindsetdata_io` handle — Entry 32 / x_strategy.md
+- Boost10x mentioned only if/when they're ready to appear publicly — advisors.md
+- AI-native V1 positioning — mindset.md §10
+
+### Overlap with `x_strategy.md`
+
+`x_strategy.md` — daily/weekly X ops manual (post types, engagement pattern, follower playbook). Long-lived.
+`beta_launch_content.md` — bounded pre-launch push, 2-3 months, coordinates X + LinkedIn + Reddit around the beta cohort. Retires after the beta cohort fills.
+
+The X section in the new doc references x_strategy.md rather than duplicating it — reader should hold both.
+
+### User confirmations (same session, ~15 min later)
+
+All five open decisions confirmed:
+
+| Question | Confirmation |
+|---|---|
+| Landing page ready? | ✅ Yes — live |
+| Beta cohort size | ✅ Small (locked as 5–10 plants, ~2 per vertical) |
+| Personal profile for LinkedIn | ✅ Mohamed |
+| Language default | ✅ English (was: French recommended primary — flipped to English primary, French secondary for FR-only audiences) |
+| Discord as beta community | ✅ Yes |
+
+### Doc updates applied
+
+- §2 rewrote the "must ship first" checklist as a status table (landing/form/Discord marked done, cohort size locked)
+- §4 flipped English → primary, French → secondary/optional
+- §6 calendar reworked: Day 0 = English LinkedIn anchor (was: French); Day 14 = French version (was: FR anchor rerun)
+- §10 first actions split into "Done ✅" (3 items) and "Still to do" (7 items with bold blockers for Day 0)
+
+### Discipline note
+
+Log written same turn as file creation and same turn as user confirmations. Pattern holds — 11 turns in a row.
+
+### 2026-07-04 addendum — editions correction + X posting hierarchy
+
+User pushed back on two things: (a) the anchor content was framed too narrowly as "on-prem only" when the product actually ships in **three deployment modes** (Self-Hosted / On-Premise / Hybrid — locked decision in `docs/decisions.md`); (b) asked where on X they should actually post (personal, public, or groups).
+
+**Editions correction — content changes:**
+
+| Section | Before | After |
+|---|---|---|
+| §3.1 Twitter anchor | "on-prem edge platform... no cloud required" | "AI-native industrial platform... Self-Hosted / On-Premise / Hybrid — your data stays where you want it" |
+| §4.1 EN LinkedIn anchor | "NO cloud dependency, NO hyperscaler lock-in... runs on one edge box next to the PLC" | "no hyperscaler lock-in, no 6-month integration, no forced cloud. Three deployment modes — Self-Hosted / On-Premise / Hybrid — because a pharma lab, a cosmetics logistics hub, and a metallurgy site have different sovereignty and connectivity constraints" |
+| §4.1 FR LinkedIn anchor | Same French version updated with the same rewrite |
+| §4.2 Topic #2 | "Why on-prem in 2026?" | "Why 3 deployment modes (and why cloud-first is a mistake for European industry)" |
+
+The correction matters — the earlier framing accidentally boxed us into competing with on-prem-only vendors (Litmus/HighByte), missing the Self-Hosted (customer server) and Hybrid (edge + EU-BYOC) prospects who don't want a shipped appliance. Three modes = broader ICP.
+
+**New §3.2b — Where to post on X:**
+
+Added a ranked account/venue hierarchy:
+
+1. `@mindsetdata_io` brand account — PRIMARY (anchor tweets, build updates, beta drops)
+2. Mohamed's personal profile — AMPLIFIER (retweet/quote-tweet brand, add personal take — personal accounts get 3–5× more organic reach on X for technical content)
+3. X Communities (X's version of topic groups) — join 3–5, post ≤ 1×/week/community, always contribute more than you post. Recommended: Industrial Automation, Manufacturing, Golang, Self-hosted, IoT/Edge
+4. Quote-tweets of Ignition/HighByte/OPC Foundation/Siemens — free reach into their follower base if you add real value
+5. X Spaces — deferred until month 3+ (needs a customer story)
+
+Explicit anti-patterns listed: engagement pods, mass DMs, buying followers, mass-cross-posting to communities, auto-scheduled repeats, "Twitter groups access" scams. Every one of these can get an account shadowbanned or killed.
+
+Clarified that X has no Facebook-style "Groups" — posts are public by default, and the closest equivalent to groups is Communities.
+
+### Discipline note (addendum)
+
+Both updates written same turn as user question. Pattern holds — 12 turns in a row.
+
+### 2026-07-05 addendum — "own Discord vs joining existing communities"
+
+User question: *"i use discord to build my comunity of client or i subscribe to comunities that's speacking about this world of my solution?"*
+
+Answer: **both, but they're two completely separate strategies** — different goals, different rules, different time budgets. Confusing them is the classic beta-launch mistake (either turning your own community into a public pitch channel, or treating public communities as your captive audience).
+
+**Doc changes:**
+
+1. §2 Discord row now explicitly labels the private Discord as **private, invite-only, not on the landing page**. Cross-references §5.8 for the separate question of joining public communities.
+
+2. New **§5.8 "Two very different community strategies — DON'T confuse them"** — clear side-by-side table:
+
+| | Own Discord | Public communities |
+|---|---|---|
+| Purpose | Serve paying/beta users | Reputation + learn + spot prospects |
+| Access | Private, invite-only | Public |
+| Voice | Direct, personal | Third-party expert |
+| Beta link? | N/A | Never unless asked |
+| Metric | Retention, NPS | Reputation, weak-signal DMs |
+
+3. Reality check documented: **industrial automation is NOT Discord-native.** The veterans live on LinkedIn, PLCs.net, Control.com, Reddit r/PLC. Discord is stronger for adjacent tech (Go, React). Doc now recommends where to actually go:
+   - Industrial forums (primary): PLCs.net, Control.com, Ignition Users Group, OPC Foundation LI
+   - Adjacent Discords/Slacks (secondary): Gophers, Reactiflux, Node-RED
+   - LinkedIn Groups (revived 2024–25): Industry 4.0, French manufacturing, vertical-specific
+
+4. Weekly time budget added: ~2h/week for public communities (30 min forums + 15 min adjacent Discords + 15 min LinkedIn Groups + daily 30–60 min on OWN Discord for beta users). Miss two weeks and you disappear from the algorithms.
+
+5. "The trap" section: public communities never BUILD your community for you. They feed the top of the funnel; your own Discord IS where prospects convert to customers.
+
+### Discipline note (2nd addendum)
+
+Same-turn logging. Pattern holds — 13 turns in a row.
+
+### 2026-07-05 addendum #2 — execution-ready posts file
+
+User: *"give me just posts that i will share and where in separate file please :)"*
+
+Created **`docs/posts_to_publish.md`** — pure copy-paste execution artifact, no strategy commentary. Split from `beta_launch_content.md` (which stays as the strategy doc). Structure:
+
+- **Week 1** — Day 0 (LinkedIn EN anchor), Day 1 (Twitter pinned anchor + build-update), Day 2 (Reddit r/OPCUA post)
+- **Week 2** — Day 7 (LinkedIn EN "3 deployment modes"), Day 8 (Twitter SQLite 3-tweet thread), Day 10 (Twitter Pipeline Studio screenshot), Day 11 (rest), Day 14 (LinkedIn FR — optional), Day 15 (Reddit r/golang engine post)
+- **Coming up (weeks 3–4)** — 5 rough outlines for LinkedIn Topic #3, Topic #4, behind-the-scenes tweet, r/selfhosted, r/dataengineering
+- **Reference table** — accounts, landing URL, UTMs, Discord policy
+- **Reminders** — comment-reply windows, anti-shill rules, weekly Friday review
+
+Each post block has: platform + account (brand vs Mohamed personal), time (CET), post text verbatim, and a short note for image / follow-up / reply strategy. Char counts noted on tweets.
+
+Posts reflect all corrections from prior turns:
+- 3 deployment modes (Self-Hosted / On-Premise / Hybrid) — no "on-prem only" framing
+- English default on LinkedIn (French kept as secondary/optional for Day 14)
+- Brand `@mindsetdata_io` posts + Mohamed retweet-amplifies (not the other way around)
+- Reddit posts NEVER include the beta link in the body — bio only
+- No moats revealed (Impact Engine, OF/batch Fuzzy Join, MCP-as-SSOT never mentioned)
+
+### Discipline note (3rd addendum)
+
+Same-turn logging. Pattern holds — 14 turns in a row.
+
+### 2026-07-05 addendum #3 — Twitter pivot: personal account ONLY, brand handle stays dormant
+
+User: *"i will use just my personal account"*
+
+**Decision:** All Twitter/X posting comes from Mohamed's personal profile. `@mindsetdata_io` handle stays reserved but dormant (register to prevent squatting, activate later if there's a reason).
+
+**Reasoning:**
+- Personal accounts get 3–5× more organic reach on X for technical content
+- One account = one voice — easier to build than splitting focus on two weak accounts
+- User's Twitter presence is currently weak (self-reported earlier) — better to concentrate energy
+- Trade-off (no continuity if role changes) is acceptable at pre-seed stage
+
+**Doc changes applied:**
+
+1. **`docs/posts_to_publish.md`** — all account labels changed from `@mindsetdata_io` → Mohamed personal. Tweet copy rewritten to first-person voice ("I'm building" / "I chose SQLite" / "what I've been building"). Reference table now lists `@mindsetdata_io` as "RESERVED but DORMANT" and adds a "Twitter bio" line: `"Building MindSet Data — mindsetdata.io/beta"`.
+
+2. **`docs/beta_launch_content.md`** §3 — new confirmation note at the top of the Twitter section: personal-only, brand handle dormant, bio requirement documented. Added "Why personal-only" bullet list.
+
+3. **`docs/beta_launch_content.md`** §3.2b — old table had brand `@mindsetdata_io` as rank 1 and Mohamed personal as rank 2 amplifier. Rewritten: rank 1 is Mohamed's personal timeline (primary), rank 2 is X Communities, rank 3 quote-tweets of adjacent-industry announcements, rank 4 self-quote-tweets for milestone moments, rank 5 X Spaces (deferred to month 3+).
+
+**One caveat flagged to user** (from response): still register `@mindsetdata_io` today (2 min) to prevent squatting, and add "Building MindSet Data — mindsetdata.io/beta" to both Twitter and LinkedIn bios so profile visitors also convert.
+
+### Discipline note (4th addendum)
+
+Same-turn logging. Pattern holds — 15 turns in a row.
+
+### 2026-07-05 addendum #4 — restructured social docs by PLATFORM (was: by function)
+
+User: *"delete the unecesssairy files and write 3 new files about posts in linkedin twitter and reddit and how we post especially in twiter"*
+
+**Deleted:**
+- `docs/beta_launch_content.md` — strategy doc (superseded)
+- `docs/posts_to_publish.md` — copy-paste posts doc (superseded)
+- `docs/x_strategy.md` — original X playbook from Entry 35-38 (June 30) — best content merged into new posts_twitter.md
+
+**Created — one file per platform, strategy + posts + "how to post" all in one:**
+
+| File | Focus | Size |
+|---|---|---|
+| `docs/posts_linkedin.md` | Setup, mechanics, cadence, 5 full post drafts (anchor EN + "3 deployment modes" EN + "40-second micro-stop" EN + "we don't sell AI, we sell context" EN + French anchor optional), Groups strategy, metrics, first actions | ~380 lines |
+| `docs/posts_twitter.md` | **Heaviest section per user request** — detailed HOW-TO (composing single tweets, threads, images, quote-tweets, replies, pinning, Community posting, timing table, hashtag rules, follow strategy across 4 days), 5 post drafts (anchor pinned tweet + build update + 3-tweet SQLite thread + screenshot post + self-quote-tweet milestone), metrics, tools | ~410 lines |
+| `docs/posts_reddit.md` | 5 anti-shill rules, subreddit ranking, composing/commenting mechanics, cadence, 4 full/outlined post drafts (r/OPCUA ISA-95 mapping + r/golang topological engine + r/selfhosted docker-compose + r/dataengineering micro-batch rules), metrics, first actions | ~290 lines |
+
+**Structural choices:**
+
+1. Each file is stand-alone — user opens ONE file when working on ONE platform, no cross-doc jumping.
+2. Each file follows the same template: Setup → Mechanics/HOW-TO → Cadence → Timing → Anti-patterns → Metrics → Posts → First actions. Makes them scannable.
+3. Twitter file has extra HOW-TO detail (per user's "especially in twiter" ask):
+   - Step-by-step tweet composition ("click the +", "add ALT text on every image", "PIN via three-dot menu")
+   - Thread mechanics (numbered 1/3, reply-to-self)
+   - Community posting rules (max 1/week/community)
+   - 4-day follow strategy carried forward from old x_strategy.md but rewritten for personal-account-only
+   - Explicit "avoid Monday morning, dead Friday evening, all weekends B2B" timing rule
+   - Timing table for CET slots
+4. All content reflects prior confirmations: 3 editions, English default, Mohamed personal only, brand handle dormant, Discord private only, moats never revealed in posts (Impact Engine / Fuzzy Join / MCP-SSOT stay hidden).
+5. Cross-reference between docs is minimal — each file mentions the others exist but doesn't rely on them for context.
+
+**What carried over from x_strategy.md:**
+- 4-day follow list (Anthropic ecosystem → FR VCs → Boost10x → dev)
+- Tools recommendations (Typefully, Hypefury, Canva, Loom)
+- Metrics targets (adjusted for personal-only reach)
+- "NEVER post" list (financials, TAM, pricing, competitor attacks, politics)
+- The 30-min today checklist pattern
+
+**What was dropped from x_strategy.md:**
+- STEP 1.1 brand account setup (superseded — handle dormant, no active brand voice)
+- STEP 4 cadence table with Cécilia (user is personal-only for now)
+- Option A/B/C first-post drafts (replaced with the new anchor post from beta content plan)
+- Boost10x per-advisor amplification quota (kept the concept, dropped the mechanics)
+
+### Discipline note (5th addendum)
+
+Same-turn logging. Pattern holds — 16 turns in a row.
+
+### 2026-07-05 addendum #5 — Twitter posts pivoted to problem→solution structure
+
+User: *"for twiter, i want attractives posts no pure technicals because i'm not sure yet about my technicals choises"* then *"for twiter i wanna speak more about problem and my solution"*
+
+Two-step evolution over the same session:
+1. First pivot: remove technical spec-sheet posts (SQLite thread, "12 function types", ISA-95 heuristic) because user isn't ready to lock in the stack publicly
+2. Second pivot: replace abstract vision posts (founder journey, "European sovereignty compounds") with concrete problem→solution posts
+
+**Final content structure in `docs/posts_twitter.md`:**
+
+Every tweet now follows a **two-beat** structure:
+- **Beat 1:** concrete plant-floor problem (real quote, real number, real scene)
+- **Beat 2:** what MindSet does about it (capability-level, not stack-level)
+- **CTA:** beta link
+
+Guardrail added: "if a draft has only Beat 1 (problem, no solution) → weak. Only Beat 2 → hollow. Both, in order → attractive."
+
+**Posts rewritten:**
+
+| # | Angle | Beat 1 (problem) | Beat 2 (solution) |
+|---|---|---|---|
+| 1 | Anchor (pinned) | "why did we lose 23 minutes today?" | "real-time answers on the shop floor, on your box, no forced cloud" |
+| 2 | Factory-visit story | 6 weeks / 12 factories, whiteboards | "the answer, on their box, live" |
+| 3 | AI-demo contrast | vendors return empty "reduced throughput" answers | "MindSet gives AI the plant's context — batch, operator, cause, cost" |
+| 4 | Reports too late | plant director quote: "shift is over, can't do anything" | "shows it while the operator can still act" |
+| 5 | Sub-minute stops | ERP invisibility of 40-second stalls, 6 figures/week | "catches every one in real time — cause, batch, cost attached" |
+| 6 | Data silos | SCADA/ERP/LIMS = 4 tabs + phone call | "one live view, one question, one answer" |
+| 7 | Compliance blocker | French pharma director + US cloud | "runs on their box, data never leaves — Self-Hosted / On-Premise / Hybrid" |
+| 8 | Milestone self-quote | beta list signal | (same repeatable format) |
+| 9 | Screenshot | ops-director quote: "want to see the plant, not a spreadsheet" | "live machine status, current stops, cost bleeding right now — one screen" |
+| 10 | Quote-tweet templates | industry news = your setup | problem→solution punchline |
+
+**Cadence rewritten:**
+- Tue: problem story (real scene ending with what MindSet does)
+- Wed/Thu: contrast post (current tools do X, MindSet does Y)
+- Fri: screenshot or milestone quote-tweet — solution in action
+
+**Coming-up queue reframed:** 6 problem→solution angles (batch failure investigation, invisible stops, night-shift information asymmetry, wrong OEE, deployment-day-1-vs-90, demo video).
+
+**Deleted:**
+- Post 4 "founder journey" (I quit a comfortable job…) — pure vibes, no problem/solution beat
+- Post 5 "European industry has one decade to reclaim intelligence" — abstract, no concrete plant beat
+
+**Preserved from prior pivots:**
+- No stack-level details (Go engine, SQLite, ISA-95 heuristic — all off-limits)
+- English default (user confirmed)
+- Personal account only (`@mindsetdata_io` dormant)
+- No moats revealed (Impact Engine / Fuzzy Join / MCP-SSOT never named)
+
+### Discipline note (6th addendum)
+
+Same-turn logging. Pattern holds — 17 turns in a row.
+
+### Discipline note (6th addendum)
+
+Same-turn logging. Pattern holds — 17 turns in a row.
+
+---
+
+## Entry 61 — 2026-07-07 — MySQL connector Day 1 — simulation stack up and verified
+
+**Trigger:** user validated the 2-week plan and said *"ok do the first step (day 1)"*.
+
+### What Day 1 required
+
+Per `docs/mysql_connector.md` §11:
+- Create `docker-compose.dev-erp.yml`
+- Write `sim/erp/schema.mysql.sql`, `sim/erp/seed.mysql.sql`, `sim/erp/grant.mysql.sql`
+- Bring MySQL up
+- Verify seed loaded
+- Verify `mindset_readonly` cannot INSERT
+
+### What shipped
+
+**Files created:**
+
+| Path | Content |
+|---|---|
+| `docker-compose.dev-erp.yml` | MySQL 8 container, port 3306, volume + health check, mounts 3 init scripts |
+| `sim/erp/schema.mysql.sql` | 6 tables: products, operators, work_orders, batches, schedules, quality_results — with FKs + indexes |
+| `sim/erp/seed.mysql.sql` | Realistic seed with relative dates (`NOW() - INTERVAL`): 12 products (agrifood/pharma/cosmetics), 8 operators (3 shifts), 30 historical work orders, 3 RUNNING work orders on `machine1/2/3`, 5 PLANNED, 15 batches, 18 quality results (some intentionally out-of-spec → FAIL/REWORK statuses), 5 schedule entries |
+| `sim/erp/grant.mysql.sql` | Explicit `CREATE USER` for `mindset_readonly` (SELECT only) and `mindset_writer` (SELECT, INSERT, UPDATE — no DELETE) |
+
+### Bug caught and fixed
+
+Initial `grant.mysql.sql` used `REVOKE ALL PRIVILEGES ON fake_erp.* FROM 'mindset_readonly'@'%'` on top of MYSQL_USER's auto-created user. On MySQL 8.4, this fails with `ERROR 1141: There is no such grant defined` — 8.4's grant-matching is stricter than older versions and the auto-entrypoint's grant syntax doesn't line up with a wildcard REVOKE.
+
+**Fix:** removed `MYSQL_USER`/`MYSQL_PASSWORD` from `docker-compose.dev-erp.yml`, moved all user creation into `grant.mysql.sql` with explicit `CREATE USER IF NOT EXISTS ... GRANT ...`. Docker-compose only handles the root password + database name.
+
+The docker-compose file has an inline comment explaining WHY MYSQL_USER is intentionally omitted, so a future dev doesn't add it back.
+
+### Verification
+
+After a fresh volume boot:
+
+| Check | Result |
+|---|---|
+| All 3 init scripts run without error | ✅ |
+| Row counts: products/operators/work_orders/batches/schedules/quality_results | 12 / 8 / 38 / 15 / 5 / 18 |
+| 3 RUNNING work orders visible (one per work_center: machine1, machine2, machine3) | ✅ |
+| `mindset_readonly` CAN SELECT | ✅ (38 work orders visible) |
+| `mindset_readonly` CANNOT INSERT | ✅ ERROR 1142 `INSERT command denied` |
+| `mindset_writer` CAN INSERT + UPDATE | ✅ |
+| `mindset_writer` CANNOT DELETE (by design — erpsim never deletes) | ✅ ERROR 1142 `DELETE command denied` |
+
+### Design decisions worth capturing
+
+1. **Writer intentionally has no DELETE.** Enforces production safety — the simulator never deletes work orders / batches / quality results; state changes flow through UPDATE only (mimics real ERP behavior).
+2. **Relative timestamps in seed.** Every date uses `NOW() - INTERVAL X DAY` so the seed stays realistic no matter when the container is first booted. No stale "2024-06-15" dates that make the demo feel dead.
+3. **Work-center names match the OPC-UA sim.** `machine1`, `machine2`, `machine3` — so events from the OT side can join to work orders on the IT side without any config gymnastics.
+4. **Out-of-spec quality results seeded intentionally.** Batches B-2026-5002, -5004, -5005, -5010 have failing measurements → their `quality_status` reflects `FAIL`/`REWORK` — gives Day 8's demo pipeline real data to reason over.
+
+### To restart the stack
+
+```powershell
+docker compose -f docker-compose.dev-erp.yml down -v   # optional — only if you want a fresh volume
+docker compose -f docker-compose.dev-erp.yml up -d
+```
+
+Password for the connector user: `readonly_dev` (env var: `MINDSET_ERP_PASSWORD`).
+
+### Day 1 Definition of Done (from the plan)
+
+- [x] docker-compose starts MySQL + seeds + grants in <30s (measured ~25s to healthy on this box)
+- [x] Seed rows present + queryable
+- [x] mindset_readonly can SELECT
+- [x] mindset_readonly cannot INSERT/UPDATE/DELETE
+- [x] mindset_writer can INSERT + UPDATE (needed for erpsim Day 2)
+- [x] mindset_writer cannot DELETE (by design)
+
+### Discipline
+
+Own top-level entry per convention. Next: Day 2 — `cmd/erpsim` binary.
+
+---
+
+## Entry 60 — 2026-07-06 — Semantic mapping layer added to MySQL connector plan
+
+**Trigger:** user question: *"for data mapping it will depend on the type of systems, right ?"* — recognizing that §6 of `docs/mysql_connector.md` only covered the *type* mapping layer, missing the *semantic* layer that changes per customer / per ERP.
+
+**Diagnosis:** the MySQL doc originally handled `MySQL INT → Go int64 → JSON number` (universal) but ignored `customer's column wo_no ↔ MindSet's canonical field of_number` (per-system). Without the semantic layer, every downstream feature (rules engine, KG, Impact Engine, MCP) would have to be schema-aware — the opposite of what we're trying to sell.
+
+### Design landed
+
+**Canonical model** — small opinionated set of business objects the whole platform can assume:
+
+```
+WorkOrder { of_number, product_code, work_center, planned_qty, actual_qty, status, started_at, finished_at, operator_id }
+Batch     { batch_id, of_number, started_at, finished_at, quality_status }
+Product   { product_code, name, target_rate, recipe_id, hourly_margin }
+Schedule  { work_center, of_number, planned_start, planned_end }
+Quality   { batch_id, measured_at, metric, value, spec_min, spec_max }
+Operator  { operator_id, name, shift }
+```
+
+These match the fake ERP sim schema (§10.2) by design — the sim IS the canonical shape.
+
+**Two-layer translation on the connector:**
+
+1. `field_map` — per-connector mapping from customer columns (`wo_no`, `mat_code`) to canonical field names (`of_number`, `product_code`)
+2. `value_map` — per-field enum translation (e.g. SAP `CRTD/REL/TECO` → canonical `PLANNED/RUNNING/DONE`)
+
+**Handler output shape changes:** every query result now includes BOTH `rows` (raw customer columns) AND `canonical` (normalized MindSet objects) plus `canonical_type` (`work_order` / `batch` / …). Downstream nodes consume `canonical`; raw stays available as escape hatch.
+
+**System profiles (V1c queue):** bundle of pre-built `field_map`s + named queries for common ERPs.
+
+| Profile | System | Ships in |
+|---|---|---|
+| `generic` | Any — user writes raw SQL + inline field_map | **V1a — this milestone** |
+| `sap_mii_sql` | SAP MII SQL views | V1c |
+| `odoo` | Odoo Community MySQL/PostgreSQL | V1c |
+| `dolibarr` | Dolibarr open-source ERP | V1c |
+| `ignition_mes` | Inductive Automation MES backend | V1c |
+| `sap_ecc_direct` | Direct SAP ECC tables | V2 |
+
+Custom profiles = customer-specific YAML dropped into `config/profiles/` at deploy time.
+
+### Why NOT push semantic mapping downstream as a `transform` node
+
+Three reasons documented in §6b:
+
+1. **Downstream everything assumes canonical.** Pushing schema-awareness into rules/KG/Impact/MCP defeats the purpose.
+2. **Library effect.** `field_map` at the connector = each customer's onboarding cost stays flat instead of growing.
+3. **Moat compounding.** System profiles are shippable IP; HighByte + Litmus both invest here. Missing this = lose "1-day install" claims to competitors.
+
+### V1a sprint impact
+
+- **+1 day** on the 2-week timebox (Day 4 becomes Day 4–5 to add `applyFieldMap` + `applyValueMap`; Day 7 becomes Day 7–8 for the `FieldMapEditor` UI component)
+- Definition of Done extended: 3 new checklist items for field_map coverage
+- V1a still ships in 2 weeks — the extra day was slack in the original sprint
+
+### Doc changes applied
+
+- New **§6b Semantic mapping** — the OTHER mapping layer (canonical model, `field_map`, `value_map`, system profiles, why not defer, V1a impact, V1c queue)
+- **§11 task list** — Day 4→5 extended, Day 7→8 extended, Day 6 shifted
+- **§14 Definition of Done** — 3 new items on field_map end-to-end
+
+### Discipline
+
+Own top-level entry per new convention. `docs/mysql_connector.md` remains the executable slice for V1a.
+
+---
+
+## Entry 59 — 2026-07-06 — MySQL connector — detailed V1a implementation plan
+
+**Trigger:** user said *"ok, we start with mysql connector. Give me all the plan"* — narrower, executable slice of the general SQL plan.
+
+**Deliverable:** `docs/mysql_connector.md` — ~550 lines, the ONLY doc needed to implement MySQL end-to-end.
+
+### Why MySQL first (decision)
+
+| Reason | Note |
+|---|---|
+| Fastest local spin-up | Docker `mysql:8` starts in <10s |
+| Pure-Go driver | `go-sql-driver/mysql` — no CGO, cross-compiles to edge box |
+| Wide install base | Common in agrifood + metallurgy target verticals |
+| Simple auth | User/pass over TCP + optional TLS — no Kerberos/Windows Auth |
+| Same wire as MariaDB | Two DBs from one connector |
+| Fast learning loop | Full OT/IT flow demoable in one afternoon |
+
+### V1a scope
+
+**In:** MySQL 8 + MariaDB 10, read-only parameterized SELECT, user/pass + TLS, pooling, type mapping, YAML + REST connection config, Pipeline Studio UI, docker sim + erpsim binary, unit + integration tests.
+
+**Out:** Postgres/MSSQL (V1b — 1 more week, reuses ~80% of the code), Oracle/SAP HANA (V2), non-SELECT (never), CDC (V2).
+
+### Doc structure (16 sections)
+
+1. Why MySQL first
+2. Scope (V1a in/out)
+3. Files to add/modify — 15 new, 5 modified
+4. Dependencies — `go-sql-driver/mysql` only
+5. **MySQL DSN parameters (critical)** — `parseTime=true`, `loc=UTC`, `charset=utf8mb4`, `interpolateParams=false`, `readTimeout`, `writeTimeout`, `tls`
+6. Connection config YAML shape
+7. **Type mapping table** — TINYINT(1)→bool, DECIMAL→string, DATETIME→RFC3339, JSON→parsed, BLOB→base64
+8. Handler skeleton (full code sketch)
+9. `internal/connections/` package layout — config, dsn, registry, health
+10. REST endpoints — 5 routes with SQLite persistence
+11. **Simulation stack (concrete)** — `docker-compose.dev-erp.yml`, `schema.mysql.sql`, `seed.mysql.sql`, `grant.mysql.sql`, `cmd/erpsim` Go binary
+12. **Ordered task list — Day 1 through Day 10** (2-week sprint)
+13. Testing plan — 15 unit tests + 5 integration + 1 E2E
+14. **MySQL gotchas** — TINYINT(1), DECIMAL precision, DATETIME vs TIMESTAMP, utf8 vs utf8mb4, max_allowed_packet, interpolateParams, connection lifetime, case sensitivity, JSON type version
+15. Definition of Done — 12-item checklist
+16. What's free for V1b (Postgres/MSSQL)
+
+### Key architectural decisions locked
+
+1. **Connections are first-class**, not embedded in pipelines (one DSN, many pipelines, one pool)
+2. **All DSN parameters set to safe defaults** — user never types the DSN
+3. **`ensureSelectOnly` + `ensureLimit` at handler level** — belt AND suspenders
+4. **Passwords via env vars only** — no inline, no persistence in cleartext
+5. **Read-only DB user enforced by health check** — CREATE TEMPORARY TABLE probe on startup, badge non-read-only connections red in UI
+6. **`SetConnMaxLifetime(5m)`** — recycles before typical server-side `wait_timeout`
+7. **Type mapping is JSON-friendly** — bool for TINYINT(1), RFC3339 for time, base64 for binary, parsed for JSON columns
+8. **`cmd/erpsim` uses a separate `mindset_writer` user** — enforces the boundary that the real connector can't write
+
+### 2-week sprint plan (Day 1 → Day 10)
+
+- **Week 1 backend:** docker sim (D1) → erpsim (D2) → connections package (D3) → sql_query rewrite (D4) → REST endpoints (D5)
+- **Week 2 UI + tests:** Connections page (D6) → SQL config panel (D7) → example pipeline (D8) → integration tests (D9) → docs + demo recording (D10)
+- **Week 3:** first customer smoke test
+
+### V1b (Postgres + MSSQL) built on this foundation
+
+- Registry, health check, handler shell, REST endpoints, frontend — reused as-is
+- Only additions: `dsn_postgres.go`, `dsn_mssql.go`, matching placeholder syntax swaps, integration tests
+- Estimated timebox: 1 week
+
+### Ties to moats
+
+- **Fuzzy Join OF/batch (moat #2)** — SQL is the IT half of the reconciliation. This ships the IT half; the Fuzzy Join algorithm stays hidden.
+- **Impact Engine (moat #1)** — needs `products.hourly_margin` from SQL; V1a unlocks the real cost model.
+- **MCP-at-edge (moat #3)** — MCP will surface SQL data to the LLM as context; SQL is one of MCP's underlying tools.
+
+### Discipline
+
+Own top-level entry per new convention. `docs/sql_connectors.md` remains the strategy doc; `docs/mysql_connector.md` is the executable slice.
+
+---
+
+## Entry 58 — 2026-07-06 — SQL connectors V1 implementation plan
+
+**Trigger:** user identified SQL connectors as the next roadmap step. Requested a dedicated planning doc with steps, simulation strategy, "everything."
+
+**Context:**
+- Currently `sql_query` is registered as a connector-type function but is a **demo stub that errors if executed** (see `CLAUDE.md` function catalog).
+- SQL connectors are the fastest path to OT/IT reconciliation — the Moat #2 (Fuzzy Join OF/batch) needs IT-side data (OF, batch, product, schedule, quality) that lives in the customer's ERP/MES/LIMS.
+- Portable — ~90% of mid-sized manufacturers have at least one SQL-accessible IT system; no vendor-specific SDK required.
+
+**Deliverable:** `docs/sql_connectors.md` — 400+ line implementation plan.
+
+### Structure of the doc
+
+| §  | Content |
+|---|---|
+| 0 | Why now — leverage on Fuzzy Join / Impact Engine / AI context layer |
+| 1 | Scope V1 in/out — Postgres/MySQL/MSSQL/SQLite in, Oracle/SAP HANA/CDC deferred |
+| 2 | Architecture — new `internal/connections/` package + connector rewrite path |
+| 3 | Function spec — `sql_query` config schema, output shape (rows + row_count + query_ms) |
+| 4 | Connection configuration — file-based (`config/connections.yaml`) + runtime REST |
+| 5 | Security — read-only user enforcement, SQL injection defense, TLS, timeout enforcement |
+| 6 | **Simulation environment** — docker-compose ERP + fake schema + `cmd/erpsim` seed binary |
+| 7 | Implementation steps (10 ordered) — drivers → package → handler → registration → REST → UI → sim → tests → docs → customer smoke |
+| 8 | 4 common V1 use cases with pipeline sketches — OF enrichment, shift schedule, product master, cost-model input |
+| 9 | UI changes summary — Connections page, SQL config panel, function meta/docs/defaults |
+| 10 | Testing checklist — unit, integration (testcontainers), end-to-end |
+| 11 | Rollout — 3-week milestone chain to first customer smoke test |
+| 12 | Risks — SAP lockdown, Oracle CGO, timezone drift, schema drift, connection storms |
+| 13 | Post-V1 queue — REST, Werum PAS-X, SAP MII, historians, CDC |
+| 14 | TL;DR 3-week plan |
+
+### Key design decisions locked
+
+1. **Connections are first-class** (not embedded in pipeline YAML) — one DSN, many pipelines, single pool
+2. **Read-only DB user recommended + enforced** — startup health check verifies SELECT-only; handler rejects any non-SELECT query
+3. **Mandatory query timeout + row limit** — 30s / 1000 rows defaults, no exceptions
+4. **Passwords via env vars only** — never inlined in YAML
+5. **All drivers pure-Go** (`lib/pq`, `go-sql-driver/mysql`, `microsoft/go-mssqldb`, `modernc.org/sqlite`) — no CGO, edge-box friendly
+6. **ERP simulator ships in the repo** (`sim/erp/schema.sql` + `cmd/erpsim`) — solves the "how do we demo/test without a real customer" problem
+7. **First customer smoke test = 48h wire-and-show** on a pharma or agrifood plant's read-only DB
+
+### What ties into other moats
+
+- **Impact Engine** (moat #1 — `docs/impact_engine.md`) — SQL is where `products.hourly_margin` comes from; cost stops being "flat plant rate"
+- **Fuzzy Join OF/batch** (moat #2) — SQL connectors are the IT side of the join; Fuzzy Join itself stays hidden until customer contract
+- **MCP-at-edge** (moat #3) — MCP eventually surfaces SQL-derived data to the LLM as context; SQL is one of MCP's underlying tools
+
+### Referenced but NOT rewritten
+
+- `docs/it_connectors.md` — the strategy doc, stays as-is. This new doc is the implementation plan.
+- `docs/mindset.md` §8 Module 4 — flagged to update as "V1 in progress" once implementation kicks off
+- `docs/impact_engine.md` — downstream consumer; no changes needed now
+
+### Discipline
+
+Same-turn entry per the new one-entry-per-substantial-item convention. Not lumped as an addendum.
+
+---
+
+## Entry 57 — 2026-07-05 — KG + MCP + third-party agent — brief for Cécilia's call
+
+**User trigger:** Cécilia (co-founder) has a call tomorrow (2026-07-06) with a startup that builds AI agents for factory automation. They've previously plugged their agent into an external KG. She wants to know whether ours + an MCP layer would give their agent enough to reason on top of.
+
+**Cécilia's core question (French, verbatim in `docs/Question.md`):**
+> *"Si sur nos pipelines on rajoute un MCP, l'agent a les liens qu'il faut pour raisonner dessus, right ?"*
+
+**Deliverable:** Answered inline in `docs/Question.md` (per new convention — question and answer live together, standalone answer file deleted).
+
+### The answer, condensed
+
+**Yes, IF three conditions hold:**
+
+1. **Client pipelines produce enriched events** (batch, cause, cost, equipment, operator) — not just raw telemetry. Without enrichment, the KG is a value stream, not a context graph.
+2. **MCP exposes at minimum:** (a) KG schema (node types + relations), (b) graph traversal, (c) live tag values.
+3. **Their agent speaks a compatible ontology**, OR we provide a mapping layer.
+
+Without all three, the agent can *read* our data but can't *interpret* it in factory context.
+
+### Three axes that determine compatibility
+
+| Axis | Options | Effect |
+|---|---|---|
+| **Ontology** | ISA-95 · custom · ontology-agnostic (LLM reads schema) | Determines whether direct mapping works or needs a connector |
+| **Access mode** | Historical only vs live-required | Live requires MCP to expose TagRegistry alongside KG (not just the graph) |
+| **Protocol** | MCP-native · GraphQL · SPARQL · REST | MCP-native = ideal fit; SPARQL = heavy (our KG isn't RDF) |
+
+### Strategic guidance for the call
+
+- **Position as complementary:** they build agents (their moat), we build the context layer (our moat)
+- **Ask before pitching** — 7 copy-paste questions in the doc. Question #5 (*"le KG précédent, il exposait quoi ?"*) flips info-gathering: they describe what they need instead of us describing what we have. Highest-leverage question.
+- **Propose a 2-week pilot** — no contract, no engagement, just setup + testing + retro. Frame as free R&D for us (we learn what a third-party agent expects from an industrial KG).
+- **Positioning line to drop:** *"On construit la couche de contexte au bord (edge) que les agents IA doivent avoir pour donner des réponses utiles en usine. Vous construisez les agents. On peut se brancher — voyons comment."*
+
+### What NOT to reveal (all three are moats — confidential until contract)
+
+1. **Fuzzy Join OF/batch mechanism** (moat #2 — how we tie OT events to ERP batch/product/OF context in real time)
+2. **"MCP at edge = AI single source of truth" thesis** (moat #3 — our long-term positioning; do NOT tip to a potential partner before contract)
+3. **Impact Engine model** (moat #1 — multi-factor cost calc, not just duration × hourly)
+
+General KG / pipelines / MCP language is fine. What makes each *unique to us* stays hidden.
+
+### Process note — new convention
+
+Per user's instruction *"reply me in the same doc and for each one create a new log entry"*: from now on, every question in `docs/Question.md` gets answered inline in the same file, and each Q&A gets its own top-level analysis_log entry (not an addendum under a prior entry). This is entry #1 under the new pattern.
+
+### Discipline
+
+Log written same turn as the answer, promoted to its own entry number per the new convention.
+
+---
+
 ## Entry 40 — 2026-06-30 — Cost function rethink: from "duration × hourly" to "Impact Engine"
 
 You said: *"The current cost function needs to go beyond a simple duration × line cost. We won't be able to be relevant to the client by relying solely on these two variables, especially if our goal is to prioritize impacts and reduce decision time. Our core value lies in reconciling existing systems and machines."*

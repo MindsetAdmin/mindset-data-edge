@@ -151,8 +151,9 @@ func main() {
 	mux.HandleFunc("/api/opcua/status", srv.handleOpcuaStatus)         // GET: connection status
 	mux.HandleFunc("/api/opcua/selections", srv.handleOpcuaSelections) // GET: per-tag routing (governance)
 	mux.HandleFunc("/api/dashboard/pins", srv.handleDashboardPins)
-	mux.HandleFunc("/api/kg/technical", srv.handleTechnicalGraph)
-	mux.HandleFunc("/api/kg/domain", srv.handleDomainGraph)
+	mux.HandleFunc("/api/kg", srv.handleKG)                        // unified — ?category=business|platform|all
+	mux.HandleFunc("/api/kg/technical", srv.handleTechnicalGraph)   // legacy alias → category=platform
+	mux.HandleFunc("/api/kg/domain", srv.handleDomainGraph)         // legacy alias → category=business
 	mux.HandleFunc("/api/stats", srv.handleStats)
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"status": "ok"})
@@ -382,14 +383,29 @@ func (s *server) handleTags(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{"tags": list, "total": len(list)})
 }
 
-// handleMachines groups discovered tags by work center (the part of the tag name
-// before the dot) and attaches the live Running/Stopped state when known.
+// handleMachines groups discovered tags by work center. When the user has
+// configured ISA-95 routing in Connect, the mapping in OPCUAManager is
+// authoritative and used first (keyed by NodeID). Otherwise the tag name is
+// parsed (segment before the leaf attribute).
 func (s *server) handleMachines(w http.ResponseWriter, r *http.Request) {
+	wcByNodeID := map[string]string{}
+	if s.opcua != nil {
+		for _, sel := range s.opcua.SelectionsDetailed() {
+			if sel.WorkCenter != "" {
+				wcByNodeID[sel.NodeID] = sel.WorkCenter
+			}
+		}
+	}
+
 	groups := map[string][]Tag{}
 	for _, t := range s.tags.list() {
-		wc, ok := workCenterOf(t.Name)
-		if !ok {
-			wc = "(autres)"
+		wc := wcByNodeID[t.NodeID]
+		if wc == "" {
+			var ok bool
+			wc, ok = workCenterOf(t.Name)
+			if !ok {
+				wc = "(autres)"
+			}
 		}
 		groups[wc] = append(groups[wc], t)
 	}
@@ -448,21 +464,43 @@ func orDefault(v, def string) string {
 	return v
 }
 
-func (s *server) handleTechnicalGraph(w http.ResponseWriter, r *http.Request) {
-	loader := pipeline.NewLoader(s.pipelinesDir)
-	pipelines, err := loader.LoadAll()
+// handleKG — unified KG endpoint. Query params:
+//   ?category=business  → site fingerprint (Equipment/Event/Cause/Cost/...)
+//   ?category=platform  → pipeline topology (Pipeline/Function/Topic/Connection/Dashboard)
+//   ?category=all       → both (default)
+// For category=platform or category=all, we ensure the platform sub-graph is
+// up-to-date by loading pipelines and calling RepopulatePlatform.
+func (s *server) handleKG(w http.ResponseWriter, r *http.Request) {
+	category := r.URL.Query().Get("category")
+	if category == "" {
+		category = "all"
+	}
+	if category != "business" && category != "platform" && category != "all" {
+		http.Error(w, `invalid category — use "business", "platform", or "all"`, http.StatusBadRequest)
+		return
+	}
+
+	// Refresh the platform sub-graph when the request touches it.
+	if category == "platform" || category == "all" {
+		reg := s.loadPipelineRegistry()
+		if err := s.kg.RepopulatePlatform(reg); err != nil {
+			log.Printf("[API] handleKG: RepopulatePlatform failed: %v", err)
+		}
+	}
+
+	graph, err := s.kg.GetGraph(category)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	writeJSON(w, graph)
+}
 
-	reg := pipeline.NewRegistry()
-	for _, p := range pipelines {
-		if p != nil {
-			_ = reg.Register(p)
-		}
-	}
-
+// handleTechnicalGraph — legacy alias for /api/kg?category=platform.
+// Returns the old TechnicalGraph shape (nodes/edges without category field) for
+// backward compat with any external consumer.
+func (s *server) handleTechnicalGraph(w http.ResponseWriter, r *http.Request) {
+	reg := s.loadPipelineRegistry()
 	graph, err := s.kg.GetTechnicalGraph(reg)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -471,13 +509,32 @@ func (s *server) handleTechnicalGraph(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, graph)
 }
 
+// handleDomainGraph — legacy alias for /api/kg?category=business.
 func (s *server) handleDomainGraph(w http.ResponseWriter, r *http.Request) {
-	graph, err := s.kg.GetFullGraph()
+	graph, err := s.kg.GetGraph("business")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, graph)
+}
+
+// loadPipelineRegistry builds a fresh pipeline registry from disk. Used by KG
+// handlers that need the current pipeline topology.
+func (s *server) loadPipelineRegistry() *pipeline.Registry {
+	reg := pipeline.NewRegistry()
+	loader := pipeline.NewLoader(s.pipelinesDir)
+	pipelines, err := loader.LoadAll()
+	if err != nil {
+		log.Printf("[API] loadPipelineRegistry: %v", err)
+		return reg
+	}
+	for _, p := range pipelines {
+		if p != nil {
+			_ = reg.Register(p)
+		}
+	}
+	return reg
 }
 
 func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -499,7 +556,10 @@ func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 		stats["pipelines"] = len(pipelines)
 	}
 
-	if graph, err := s.kg.GetFullGraph(); err == nil {
+	// Stats count business (site fingerprint) nodes/edges only. Platform
+	// topology counts are volatile (rebuilt from pipelines) and would inflate
+	// the "your factory has X data points" story.
+	if graph, err := s.kg.GetGraph("business"); err == nil {
 		stats["kg_nodes"] = len(graph.Nodes)
 		stats["kg_edges"] = len(graph.Edges)
 

@@ -1,0 +1,27 @@
+services:
+  mysql-erp:
+    image: mysql:8
+    container_name: mindset-erp
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: rootdev
+      MYSQL_DATABASE: fake_erp
+      # NB: MYSQL_USER/MYSQL_PASSWORD intentionally NOT set — that flow
+      # auto-grants ALL PRIVILEGES, which breaks the read-only enforcement.
+      # Both mindset_readonly and mindset_writer are created explicitly in
+      # sim/erp/grant.mysql.sql, with the exact grants we want.
+    volumes:
+      - ./sim/erp/schema.mysql.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./sim/erp/seed.mysql.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+      - ./sim/erp/grant.mysql.sql:/docker-entrypoint-initdb.d/03-grant.sql:ro
+      - erp-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-uroot", "-prootdev"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  erp-data:

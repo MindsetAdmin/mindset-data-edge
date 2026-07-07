@@ -1,9 +1,32 @@
-// internal/kg/types.go (à compléter)
+// internal/kg/types.go
+// Unified KG type definitions (2026-07-02 merge — see docs/analysis_log.md Entry 50).
+// The old TechnicalNode/TechnicalEdge/TechnicalGraph structs are preserved for
+// backward compatibility with builder.go's transient in-memory shape, but the
+// canonical persistence model is now the unified Node/Edge with Category (in graph.go).
 package kg
 
 import "time"
 
-// TechnicalNodeType représente les types de nœuds techniques
+// Category tags every KG node/edge as either operational-site data or platform-wiring data.
+type Category string
+
+const (
+	CategoryBusiness Category = "business" // Equipment, Event, Cause, Cost, Operator, OF, Product, etc.
+	CategoryPlatform Category = "platform" // Pipeline, Function, Connection, Topic, Dashboard
+)
+
+// ─── Business node type strings (used in the free-form Type field) ──────────
+const (
+	TypeEquipment = "Equipment"
+	TypeEvent     = "Event"
+	TypeCause     = "Cause"
+	TypeCost      = "Cost"
+	TypeOperator  = "Operator"
+	TypeProduct   = "Product"
+	TypeOF        = "OF"
+)
+
+// ─── Platform node type constants (also used as free-form Type strings) ─────
 type TechnicalNodeType string
 
 const (
@@ -14,7 +37,7 @@ const (
 	TechNodeDashboard  TechnicalNodeType = "dashboard"
 )
 
-// TechnicalEdgeType représente les types de relations techniques
+// TechnicalEdgeType — labels for platform edges.
 type TechnicalEdgeType string
 
 const (
@@ -26,7 +49,9 @@ const (
 	EdgeProduces     TechnicalEdgeType = "produces"
 )
 
-// TechnicalNode nœud technique du KG
+// ─── Legacy in-memory shapes (only used by the builder as an intermediate) ──
+// These are kept because the builder.go algorithm still works with them as
+// scratch space, then persists via the KnowledgeGraph.AddNode/AddEdge API.
 type TechnicalNode struct {
 	ID         string                 `json:"id"`
 	Type       TechnicalNodeType      `json:"type"`
@@ -35,7 +60,6 @@ type TechnicalNode struct {
 	CreatedAt  time.Time              `json:"created_at"`
 }
 
-// TechnicalEdge relation technique
 type TechnicalEdge struct {
 	ID     string            `json:"id"`
 	From   string            `json:"from"`
@@ -44,7 +68,6 @@ type TechnicalEdge struct {
 	Weight float64           `json:"weight"`
 }
 
-// TechnicalGraph graphe technique complet
 type TechnicalGraph struct {
 	Nodes []TechnicalNode `json:"nodes"`
 	Edges []TechnicalEdge `json:"edges"`

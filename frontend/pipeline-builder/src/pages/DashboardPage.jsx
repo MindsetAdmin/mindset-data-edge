@@ -1,9 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { fetchStats, fetchKnowledgeGraph, fetchMachines, fetchConfig } from '../api/client';
-import { buildEvents, effectiveCost, splitDays, deltaPct } from '../lib/dashboardData';
+import { buildEvents, effectiveCost, splitDays, deltaPct, groupByMachine } from '../lib/dashboardData';
 import { useLiveSocket } from '../lib/useLiveSocket';
 import LiveDataPanel from '../components/LiveDataPanel';
 import DashboardWidgets from '../components/DashboardWidgets';
+import DenseTable from '../components/ui/DenseTable';
+import StatusDot from '../components/ui/StatusDot';
 import { useStudioStore } from '../store/studioStore';
 
 const FALLBACK_MS = 20000; // safety heartbeat; real-time comes from the WebSocket
@@ -80,27 +82,35 @@ export default function DashboardPage() {
     .filter((m) => m.work_center !== '(autres)')
     .filter((m) => !selectedMachines.length || selectedMachines.includes(m.work_center));
 
+  // Per-machine breakdown: today's stops / downtime / cost / availability per work_center.
+  const perMachineRows = useMemo(
+    () => groupByMachine(events, filteredMachines, hourly, SHIFT).filter(
+      (r) => !selectedMachines.length || selectedMachines.includes(r.workCenter)
+    ),
+    [events, filteredMachines, hourly, selectedMachines]
+  );
+
   return (
     <div className="h-full overflow-y-auto p-5">
       <div className="max-w-6xl mx-auto space-y-5">
         {/* Header */}
         <div className="bg-dark-900 border border-dark-700 rounded-lg px-4 py-3 flex flex-wrap items-center gap-x-8 gap-y-1 text-sm">
           
-          <span className="text-dark-400">Site : <span className="text-dark-200">{config?.site?.name || config?.site?.id || '—'}</span></span>
+          <span className="text-dark-400">Site : <span className="text-dark-200">{config?.site?.name || config?.site?.id || ''}</span></span>
           <span className="text-dark-400">
             Statut : <span className={brokerConnected ? 'text-green-400' : 'text-red-400'}>{brokerConnected ? '🟢 Connecté' : '🔴 Déconnecté'}</span>
           </span>
           <span className="text-dark-400">Uptime : <span className="text-dark-200">{fmtDuration(stats?.uptime_seconds)}</span></span>
           <span className={`ml-auto inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${connected ? 'bg-green-500/15 text-green-400' : 'bg-dark-700 text-dark-400'}`}>
             <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-green-400 animate-pulse' : 'bg-dark-500'}`} />
-            {connected ? 'LIVE (WebSocket)' : 'hors-ligne'}
+            {connected ? 'LIVE' : 'hors-ligne'}
           </span>
-          <span className="text-dark-400">MàJ : {lastUpdate ? lastUpdate.toLocaleTimeString() : '—'}</span>
+          <span className="text-dark-400">MàJ : {lastUpdate ? lastUpdate.toLocaleTimeString() : ''}</span>
         </div>
 
         {error && (
           <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-3 text-red-400 text-sm">
-            ❌ {error} — le serveur API tourne-t-il sur :8080 ?
+            ❌ {error} le serveur API tourne-t-il sur :8080 ?
           </div>
         )}
 
@@ -128,11 +138,11 @@ export default function DashboardPage() {
                 {events.slice(0, 8).map((e) => (
                   <div key={e.id} className="py-2 flex items-center gap-3 text-sm">
                     <span className="text-dark-500 font-mono text-xs w-16">
-                      {e.createdAt ? new Date(e.createdAt).toLocaleTimeString().slice(0, 5) : '—'}
+                      {e.createdAt ? new Date(e.createdAt).toLocaleTimeString().slice(0, 5) : ''}
                     </span>
                     <span className="text-white w-24 truncate">{e.workCenter}</span>
                     <span className="text-amber-400 text-xs">Micro-stop {e.duration.toFixed(0)}s</span>
-                    <span className="text-dark-400 text-xs ml-auto">{e.cause || '—'}</span>
+                    <span className="text-dark-400 text-xs ml-auto">{e.cause || ''}</span>
                     <span className="text-green-400 text-xs font-mono w-20 text-right">{effectiveCost(e, hourly).toFixed(2)} €</span>
                   </div>
                 ))}
@@ -140,29 +150,78 @@ export default function DashboardPage() {
             )}
           </Panel>
 
-          <Panel title="🏭 Statut machines">
-            {filteredMachines.length === 0 ? (
+          <Panel title="🏭 Statut machines (per-machine  today)">
+            {perMachineRows.length === 0 ? (
               <Empty text={selectedMachines.length === 0
-                ? "Configurez une machine dans un pipeline (onglet Compose) pour la voir ici."
+                ? "Aucune machine."
                 : "Aucune machine sélectionnée active."} />
             ) : (
-              <div className="divide-y divide-dark-800">
-                {filteredMachines.map((m) => {
-                    const running = m.state?.running;
-                    const temp = tagValue(m.tags);
-                    return (
-                      <div key={m.work_center} className="py-2 flex items-center gap-3 text-sm">
-                        <span className="text-white w-28 truncate">{m.work_center}</span>
-                        <span className={running == null ? 'text-dark-500' : running ? 'text-green-400' : 'text-red-400'}>
-                          {running == null ? '⚪ n/a' : running ? '🟢 Running' : '🔴 Stopped'}
-                        </span>
-                        <span className="text-dark-400 text-xs ml-auto">
-                          {temp != null ? `${temp}°C` : `${m.tags.length} tags`}
-                        </span>
-                      </div>
-                    );
-                  })}
-              </div>
+              <DenseTable
+                columns={[
+                  { key: 'workCenter', label: 'Machine', align: 'left', width: '18%' },
+                  {
+                    key: 'running',
+                    label: 'Status',
+                    align: 'left',
+                    width: '18%',
+                    render: (running) => {
+                      const state = running == null ? 'idle' : running ? 'running' : 'stopped';
+                      const label = running == null ? 'n/a' : running ? 'Running' : 'Stopped';
+                      return <StatusDot state={state} pulse={running === true} label={label} />;
+                    },
+                  },
+                  {
+                    key: 'stopsToday',
+                    label: 'Stops',
+                    align: 'right',
+                    mono: true,
+                    width: '10%',
+                    render: (n) => (
+                      <span className={n > 0 ? 'text-text-primary' : 'text-text-muted'}>{n ?? 0}</span>
+                    ),
+                  },
+                  {
+                    key: 'downtimeToday',
+                    label: 'Downtime',
+                    align: 'right',
+                    mono: true,
+                    width: '16%',
+                    render: (d) => (
+                      <span className={d > 0 ? 'text-text-primary' : 'text-text-muted'}>
+                        {d > 0 ? fmtDuration(d) : ''}
+                      </span>
+                    ),
+                  },
+                  {
+                    key: 'costToday',
+                    label: 'Cost',
+                    align: 'right',
+                    mono: true,
+                    width: '14%',
+                    render: (c) => (
+                      <span className={c > 0 ? 'text-status-warn' : 'text-text-muted'}>
+                        {c > 0 ? `${c.toFixed(2)} €` : ''}
+                      </span>
+                    ),
+                  },
+                  {
+                    key: 'availability',
+                    label: 'Avail.',
+                    align: 'right',
+                    mono: true,
+                    width: '12%',
+                    render: (a) => {
+                      const cls =
+                        a >= 90 ? 'text-status-running' :
+                        a >= 75 ? 'text-status-warn' :
+                        'text-status-stopped';
+                      return <span className={cls}>{a.toFixed(1)}%</span>;
+                    },
+                  },
+                ]}
+                rows={perMachineRows}
+                getRowKey={(row) => row.workCenter}
+              />
             )}
           </Panel>
         </div>
@@ -180,7 +239,7 @@ export default function DashboardPage() {
 
 
 function fmtDuration(seconds) {
-  if (seconds == null) return '—';
+  if (seconds == null) return '';
   const s = Math.round(seconds);
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
@@ -235,7 +294,7 @@ function Gantt({ machines }) {
   const now = Date.now();
   const withState = machines.filter((m) => m.state);
   if (withState.length === 0) {
-    return <Empty text="Pas d'historique de transitions (l'agent doit tourner)." />;
+    return <Empty text="Pas d'historique de transitions." />;
   }
 
   // Window start = earliest transition, or 1h ago.

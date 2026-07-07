@@ -162,11 +162,19 @@ export async function fetchOpcuaSelections() {
     return response.json();
 }
 
-// kind: 'technical' | 'domain'
-export async function fetchKnowledgeGraph(kind = 'technical') {
-    const response = await fetch(`${API_BASE}/kg/${kind}`);
+// Unified KG endpoint. category: 'business' | 'platform' | 'all' (default 'all').
+// Legacy alias mapping is handled server-side, but new code should prefer this.
+export async function fetchKG(category = 'all') {
+    const response = await fetch(`${API_BASE}/kg?category=${category}`);
     if (!response.ok) {
-        throw new Error(`Failed to fetch ${kind} graph: ${response.statusText}`);
+        throw new Error(`Failed to fetch KG (${category}): ${response.statusText}`);
     }
     return response.json();
+}
+
+// Legacy shim — kept for backward compatibility. Maps 'technical'→'platform' and
+// 'domain'→'business'. New code should call fetchKG(category) directly.
+export async function fetchKnowledgeGraph(kind = 'technical') {
+    const category = kind === 'technical' ? 'platform' : kind === 'domain' ? 'business' : kind;
+    return fetchKG(category);
 }
