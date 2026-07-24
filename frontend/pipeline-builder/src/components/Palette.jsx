@@ -1,8 +1,10 @@
+import { useTranslation } from 'react-i18next';
 import { typeStyle, getCategory } from '../lib/functionMeta';
 
 // Left palette: draggable function cards. Dragging sets the function JSON on the
 // dataTransfer; BuilderPage's onDrop reads it and creates a ReactFlow node.
 export default function Palette({ functions, loading, error }) {
+  const { t } = useTranslation();
   const onDragStart = (event, fn) => {
     event.dataTransfer.setData('application/reactflow', JSON.stringify(fn));
     event.dataTransfer.effectAllowed = 'move';
@@ -11,20 +13,20 @@ export default function Palette({ functions, loading, error }) {
   return (
     <aside className="w-72 bg-dark-900 border-r border-dark-700 p-4 overflow-y-auto shrink-0">
       <h2 className="text-xs font-semibold text-dark-400 uppercase tracking-wider mb-4">
-        📦 Palette de composants
+        📦 {t('palette.title')}
       </h2>
 
       {loading && (
         <div className="text-center text-dark-400 py-8">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto mb-4" />
-          <p className="text-sm">Chargement des fonctions...</p>
+          <p className="text-sm">{t('palette.loadingFunctions')}</p>
         </div>
       )}
 
       {error && (
         <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-3 text-red-400 text-sm">
           ❌ {error}
-          <p className="text-xs text-dark-400 mt-1">Le serveur API tourne-t-il sur :8080 ?</p>
+          <p className="text-xs text-dark-400 mt-1">{t('overview.serverDownHint')}</p>
         </div>
       )}
 
@@ -56,7 +58,7 @@ export default function Palette({ functions, loading, error }) {
       ))}
 
       <p className="text-[11px] text-dark-600 mt-6 leading-relaxed">
-        Glissez une fonction sur le canvas, reliez les nœuds, puis Sauvegarder.
+        {t('palette.hint')}
       </p>
     </aside>
   );

@@ -1,0 +1,341 @@
+{
+  "nav": {
+    "overview": "Overview",
+    "connectors": "Connecteurs",
+    "compose": "Compose",
+    "pipelines": "Pipelines",
+    "dashboards": "Dashboards",
+    "kg": "Knowledge Graph"
+  },
+  "common": {
+    "loading": "Chargement…",
+    "delete": "Supprimer",
+    "save": "Enregistrer",
+    "saving": "Enregistrement…",
+    "cancel": "Annuler",
+    "run": "Exécuter",
+    "close": "Fermer",
+    "yes": "Oui",
+    "no": "Non",
+    "edit": "Modifier",
+    "search": "Rechercher…",
+    "confirm": "Confirmer"
+  },
+  "overview": {
+    "functionsAvailable": "Fonctions disponibles",
+    "subtitle": "Construisez des pipelines industriels visuellement, exécutez-les, et explorez le graphe de connaissances.",
+    "serverDownHint": "le serveur API tourne-t-il sur :8080 ?",
+    "getStarted": "Démarrer",
+    "stepConnectors": "Choisir une source de données",
+    "stepCompose": "Construire le pipeline (drag & drop)",
+    "stepPipelines": "Charger / exécuter un pipeline",
+    "stepDashboards": "Voir les métriques temps réel",
+    "stepKg": "Explorer les relations"
+  },
+  "connectors": {
+    "title": "Connecteurs",
+    "subtitle": "Cliquez un connecteur pour accéder à sa configuration.",
+    "comingSoon": "bientôt disponible"
+  },
+  "sqlConnections": {
+    "title": "Connexions SQL",
+    "subtitle": "Définissez les connexions en lecture seule.",
+    "notTested": "non testé",
+    "readOnly": "lecture seule",
+    "writeAccess": "accès en écriture",
+    "countConfigured": "{{count}} connexion(s) configurée(s)",
+    "none": "Aucune connexion définie. Créez-en une ci-dessous.",
+    "connect": "Connecter",
+    "noDatabaseVisible": "Aucune base visible pour cet utilisateur.",
+    "tableCount": "({{count}} table(s))",
+    "newConnection": "Nouvelle connexion",
+    "fieldId": "Identifiant (id)",
+    "fieldName": "Nom affiché",
+    "fieldHost": "Hôte",
+    "fieldPort": "Port",
+    "fieldDatabase": "Base de données",
+    "fieldUsername": "Utilisateur",
+    "fieldPasswordEnv": "Variable d’environnement (mot de passe)",
+    "advancedOptions": "Options avancées (timeouts, pool)",
+    "fieldReadTimeout": "Read timeout (s)",
+    "fieldWriteTimeout": "Write timeout (s)",
+    "fieldMaxOpenConns": "Connexions max ouvertes",
+    "fieldMaxIdleConns": "Connexions max idle",
+    "fieldMaxLifetime": "Durée de vie max (s)"
+  },
+  "mqtt": {
+    "title": "Connexion MQTT",
+    "subtitlePre": "Le broker MQTT est partagé par toute la plateforme (une seule connexion, configurée dans",
+    "subtitleMid": "). Choisissez ici le topic à utiliser, puis configurez le nœud",
+    "subtitlePost": "dans Compose.",
+    "unknownBroker": "Broker inconnu",
+    "connected": "connecté",
+    "disconnected": "déconnecté",
+    "activeTopics": "Topics actifs ({{count}})",
+    "noMessages": "Aucun message reçu pour l'instant. Démarrez l'agent ou une connexion OPC-UA pour voir des topics apparaître ici.",
+    "triggerConfig": "Configuration du trigger",
+    "qos0": "0 — au plus une fois",
+    "qos1": "1 — au moins une fois",
+    "qos2": "2 — exactement une fois",
+    "triggerHintPre": "Ouvrez",
+    "triggerHintMid": ", sélectionnez",
+    "triggerHintPost": "sur le nœud trigger, et reportez ces valeurs."
+  },
+  "opcuaConnect": {
+    "title": "Connexion OPC-UA dynamique",
+    "subtitlePre": "Configurez la connexion, découvrez les tags, puis choisissez comment chaque donnée circule. Les données ",
+    "subtitleMid": " sont utilisables dans toutes les fonctions ; les données ",
+    "raw": "brutes",
+    "subtitlePost": " sont stockées uniquement.",
+    "connectHint": "Connectez-vous à un serveur OPC-UA pour découvrir ses tags."
+  },
+  "opcuaPanel": {
+    "title": "Connexion OPC-UA",
+    "connectFailed": "Connexion échouée.",
+    "fieldEndpoint": "Endpoint (URL)",
+    "fieldSecurityMode": "Mode de sécurité",
+    "fieldSecurityPolicy": "Politique de sécurité",
+    "fieldUsername": "Utilisateur (optionnel)",
+    "fieldPassword": "Mot de passe (optionnel)",
+    "fieldSessionTimeout": "Timeout de session (s)",
+    "securityWarning": "Les modes Sign / SignAndEncrypt nécessitent un certificat client (non encore configuré). Utilisez « None » pour l'instant.",
+    "reconnect": "Reconnecter",
+    "disconnect": "Déconnecter"
+  },
+  "opcuaTags": {
+    "title": "Tags découverts",
+    "discovering": "Découverte…",
+    "rediscover": "Re-découvrir",
+    "discover": "Découvrir les tags",
+    "selectAtLeastOne": "Sélectionnez au moins un tag en ISA-95.",
+    "filterByName": "Filtrer par nom…",
+    "allIsa95": "Tout en ISA-95",
+    "clear": "Effacer",
+    "value": "Valeur",
+    "publishIsa95Title": "Publier en ISA-95 (utilisable dans les fonctions)",
+    "confidenceTitle": "Score de confiance du mapping ISA-95 auto-généré",
+    "pendingTitle": "Sous le seuil d'auto-validation — sera en attente dans le Knowledge Graph",
+    "noneMatchFilter": "Aucun tag ne correspond au filtre.",
+    "isa95Legend": "= utilisable dans les fonctions (le stockage brut a lieu automatiquement pour tout tag sélectionné)",
+    "applying": "Application…",
+    "apply": "Appliquer",
+    "noneDiscovered": "Aucun tag découvert sur ce serveur."
+  },
+  "pipelines": {
+    "running": "Exécution…",
+    "nodesOk": "{{status}} {{ok}}/{{total}} nœuds OK",
+    "load": "Charger",
+    "functionCount": "{{count}} fonction(s)",
+    "subtitle": "Vos pipelines tournent dans le moteur et apparaissent dans le Knowledge Graph. Les modèles sont des points de départ à charger dans Compose.",
+    "mine": "Mes pipelines",
+    "noneCreated": "Aucun pipeline créé. Construisez-en un dans Compose, ou chargez un modèle ci-dessous.",
+    "templates": "Modèles (exemples)"
+  },
+  "dashboard": {
+    "site": "Site",
+    "status": "Statut",
+    "connectedState": "Connecté",
+    "disconnectedState": "Déconnecté",
+    "offline": "hors-ligne",
+    "lastUpdate": "MàJ",
+    "today": "aujourd'hui",
+    "totalCost": "Coût total",
+    "timeLost": "Temps perdu",
+    "availability": "Disponibilité",
+    "trsProxy": "TRS (dispo.)",
+    "recentEvents": "Derniers événements",
+    "noEvents": "Aucun événement.",
+    "microStop": "Micro-stop",
+    "machineStatus": "Statut machines (par machine, aujourd'hui)",
+    "noMachines": "Aucune machine.",
+    "noMachineSelectedActive": "Aucune machine sélectionnée active.",
+    "running": "En marche",
+    "stopped": "Arrêtée",
+    "activeProduction": "Production active (ERP)",
+    "product": "Produit",
+    "statusCol": "Statut",
+    "otLink": "Lien OT",
+    "linked": "lié",
+    "notLinked": "non lié",
+    "noOtNodeMatch": "Aucun nœud Equipment OT ne correspond à ce work_center",
+    "machineTimeline": "Timeline machines",
+    "vsYesterday": "vs hier",
+    "uncategorized": "Non catégorisé",
+    "noTransitionHistory": "Pas d'historique de transitions."
+  },
+  "builder": {
+    "value": "valeur",
+    "default": "défaut",
+    "validateTitle": "Veuillez donner un titre à votre pipeline (ex: \"Micro-stop Detection\").",
+    "validateName": "Veuillez donner un nom à votre pipeline. Le nom sera utilisé comme identifiant unique.",
+    "validateNoTrigger": "Aucun connecteur (trigger) trouvé. Veuillez ajouter un connecteur dans la zone ENTRÉE.",
+    "validateMqttTopic": "Veuillez sélectionner un topic pour \"mqtt_subscribe\".",
+    "validateOpcuaTagTrigger": "Veuillez sélectionner au moins un tag pour \"opcua_read\".",
+    "validateNoSteps": "Ajoutez au moins une étape dans la zone CŒUR — son résultat sera publié automatiquement.",
+    "validateStateMachine": "Veuillez sélectionner une machine pour \"state_machine\".",
+    "validateOpcuaTagStep": "Veuillez sélectionner au moins un tag pour \"opcua_read\".",
+    "savedMsg": "Pipeline « {{name}} » sauvegardé — visible dans le Knowledge Graph.",
+    "loadedMsg": "Pipeline « {{name}} » chargé — reconfigurer les entrées/sorties.",
+    "saveBeforeRun": "Sauvegardez le pipeline avant de l'exécuter.",
+    "nodesOkShort": "nœuds OK",
+    "connectorAppliedMsg": "Connecteur « {{name}} » appliqué au trigger.",
+    "pipelineName": "Nom du pipeline",
+    "function": "Fonction",
+    "new": "Nouveau",
+    "loadEllipsis": "Charger…",
+    "addFunction": "Ajouter une fonction",
+    "duplicateTitle": "Pipeline en double",
+    "duplicateBody": "Une pipeline avec cette configuration existe déjà : « {{name}} ».",
+    "editExisting": "Modifier l'existante",
+    "renamedMsg": "Renommée — cliquez Sauvegarder.",
+    "newVersion": "Nouvelle version"
+  },
+  "nodeConfig": {
+    "selectNode": "Sélectionnez un nœud pour le configurer.",
+    "title": "Configuration",
+    "nodeId": "ID du nœud",
+    "connector": "Connecteur",
+    "connectorHelp": "Source de données qui déclenche le pipeline.",
+    "name": "Nom",
+    "nameHelp": "Nom affiché du nœud.",
+    "parameters": "Paramètres",
+    "field": "champ",
+    "noParameters": "Aucun paramètre.",
+    "choose": "Choisir",
+    "deleteNode": "Supprimer le nœud",
+    "customLabel": "{{key}} personnalisé",
+    "noMachineDiscovered": "(aucune machine découverte)",
+    "filterTags": "filtrer les tags…",
+    "selectAll": "Tout sélectionner",
+    "deselectAll": "Tout désélectionner",
+    "noTagAgent": "Aucun tag (l'agent doit tourner).",
+    "tagsSelected": "{{count}} tag(s) sélectionné(s)",
+    "manual": "Manuel",
+    "hourlyRateSource": "Source du coût horaire",
+    "fromAgentYaml": "Depuis",
+    "override": "override",
+    "chooseRateTag": "(choisir un tag contenant le taux)",
+    "currency": "Devise",
+    "noValidRow": "Aucune ligne valide (colonnes attendues : Product, Cost per Hour (€/h)).",
+    "unreadableFile": "Fichier illisible :",
+    "perProductRates": "Tarifs par produit (CSV / Excel)",
+    "productsLoaded": "{{count}} produit(s) chargé(s)",
+    "rateHint": "Le coût horaire par produit est choisi selon le champ",
+    "rateHintPost": "de l'événement (sinon, le taux ci-dessus).",
+    "costPreview": "Aperçu du coût ({{rate}} €/h)"
+  },
+  "sqlConfig": {
+    "params": "Paramètres (:nom)",
+    "param": "paramètre",
+    "noParams": "Aucun — la requête n'utilise pas de :placeholder.",
+    "connection": "Connexion",
+    "chooseConnection": "(choisir une connexion)",
+    "noConnectionPre": "Aucune connexion définie. Ajoutez-en une dans",
+    "sqlQuery": "Requête SQL (SELECT uniquement)",
+    "paramHintPre": "Utilisez",
+    "paramHintPost": "pour les paramètres. Lecture seule — INSERT/UPDATE/DELETE et les requêtes multi-instructions sont rejetées.",
+    "timeout": "Timeout (s)",
+    "limit": "Limite (lignes)",
+    "canonicalType": "Type canonique (optionnel)",
+    "previewing": "Aperçu…",
+    "previewButton": "Aperçu (5 lignes)",
+    "rowCount": "{{count}} ligne(s)",
+    "noRows": "Aucune ligne."
+  },
+  "fieldMap": {
+    "title": "field_map (modèle canonique)",
+    "hint": "Optionnel. Traduit vos colonnes vers le modèle canonique (of_number, product_code, status…) — le Rules Engine, le KG et l'Impact Engine ne verront que ces noms.",
+    "noMapping": "Aucun mapping — les résultats bruts (rows) seront utilisés tels quels.",
+    "simple": "simple",
+    "enum": "énum",
+    "sourceColumnEx1": "colonne source (ex: wo_no)",
+    "sourceColumnEx2": "colonne source (ex: st)",
+    "addValue": "valeur"
+  },
+  "liveData": {
+    "title": "Données en direct",
+    "others": "autres",
+    "chooseTags": "Choisissez un ou plusieurs tags à visualiser en direct (bouton « + tag »).",
+    "waitingForValues": "En attente de nouvelles valeurs… (l'agent doit publier)",
+    "pickerTitle": "Choisir un tag à afficher"
+  },
+  "pickerModal": {
+    "defaultCustomLabel": "Valeur personnalisée",
+    "noResults": "Aucun résultat.",
+    "use": "Utiliser"
+  },
+  "functionDocs": {
+    "mqtt_subscribe": {
+      "description": "S'abonne à un topic MQTT — c'est le déclencheur (trigger) du pipeline.",
+      "fields": {
+        "topic": { "label": "Topic", "help": "Topic MQTT à écouter." },
+        "qos": { "label": "QoS", "help": "Qualité de service MQTT (0, 1 ou 2)." }
+      }
+    },
+    "opcua_read": {
+      "description": "Lit une ou plusieurs valeurs depuis un serveur OPC-UA.",
+      "fields": {
+        "node_id": { "label": "Node ID", "help": "Identifiant du nœud OPC-UA à lire." },
+        "endpoint": { "label": "Endpoint", "help": "URL du serveur OPC-UA." },
+        "timeout": { "label": "Timeout (ms)", "help": "Délai max de lecture en millisecondes." }
+      }
+    },
+    "modbus_read": { "description": "Lit depuis un équipement Modbus (démo).", "fields": {} },
+    "sql_query": {
+      "description": "Exécute une requête SELECT paramétrée en lecture seule sur une connexion SQL. Utilisable comme trigger ou comme nœud d'enrichissement mid-pipeline.",
+      "fields": {}
+    },
+    "state_machine": {
+      "description": "Détecte les transitions Run ↔ Stop et déclenche sur les arrêts.",
+      "fields": {
+        "machine_id": { "label": "Machine", "help": "Machine à surveiller (depuis la découverte OPC-UA)." }
+      }
+    },
+    "filter": {
+      "description": "Garde ou rejette les données selon une condition.",
+      "fields": {
+        "field": { "label": "Champ", "help": "Champ sur lequel filtrer." },
+        "operator": { "label": "Opérateur", "help": "eq, ne, gt, lt, contains." },
+        "value": { "label": "Valeur", "help": "Valeur de comparaison." }
+      }
+    },
+    "calculate_duration": {
+      "description": "Calcule la durée entre le début et la fin d'un arrêt.",
+      "fields": {}
+    },
+    "calculate_cost": {
+      "description": "Calcule le coût en euros d'un arrêt à partir de sa durée.",
+      "fields": {
+        "hourly_rate": { "label": "Coût horaire (€/h)", "help": "Coût de la machine par heure." },
+        "currency": { "label": "Devise", "help": "EUR, USD ou GBP." }
+      }
+    },
+    "threshold": {
+      "description": "Vérifie si une durée est dans un intervalle (fenêtre micro-arrêt).",
+      "fields": {
+        "min": { "label": "Min (s)", "help": "Durée minimale en secondes." },
+        "max": { "label": "Max (s)", "help": "Durée maximale en secondes." }
+      }
+    },
+    "add_to_dashboard": {
+      "description": "Épingle la donnée ou l'événement sur le Dashboard.",
+      "fields": {
+        "label": { "label": "Libellé", "help": "Nom affiché du widget." },
+        "kind": { "label": "Type", "help": "\"value\" pour un nombre, \"event\" pour un événement." }
+      }
+    }
+  },
+  "palette": {
+    "title": "Palette de composants",
+    "loadingFunctions": "Chargement des fonctions...",
+    "hint": "Glissez une fonction sur le canvas, reliez les nœuds, puis Sauvegarder."
+  },
+  "category": {
+    "connectors": "Connecteurs",
+    "transforms": "Transformations",
+    "calculates": "Calculs",
+    "conditions": "Conditions",
+    "outputs": "Sorties",
+    "other": "Autres"
+  }
+}

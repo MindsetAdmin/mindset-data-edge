@@ -1,0 +1,41 @@
+id: pipeline_cost_seed
+name: 'Cost Seed '
+description: Threshold + cost, terminal node is cost so results reach the KG. Kept separate from pipeline_microstop_detection.yaml so editing that one in Compose never breaks demo-data seeding.
+version: "1.0"
+enabled: true
+properties: {}
+trigger:
+    type: mqtt
+    function: mqtt_subscribe
+    config:
+        qos: 1
+        topic: mindset/events/status-change
+nodes:
+    - id: threshold
+      name: Threshold (30s-3min)
+      type: condition
+      function: threshold
+      config:
+        max: 180
+        min: 30
+      depends_on:
+        - trigger
+    - id: cost
+      name: Cost
+      type: calculate
+      function: calculate_cost
+      config:
+        currency: EUR
+        hourly_rate: 85
+      depends_on:
+        - threshold
+    - id: add_to_dashboard_zav6f
+      name: add_to_dashboard
+      type: output
+      function: add_to_dashboard
+      config:
+        kind: value
+        label: Mon widget
+      depends_on:
+        - cost
+output: add_to_dashboard_zav6f

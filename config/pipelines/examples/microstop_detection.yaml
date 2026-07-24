@@ -1,32 +1,23 @@
 id: "pipeline_microstop_detection"
 name: "Micro-stop Detection"
-description: "Détecte les micro-arrêts (30s-3min) à partir des changements de statut"
+description: "Détecte les micro-arrêts (30s-3min) à partir des transitions Run/Stop et calcule leur coût"
 version: "1.0"
 enabled: true
 
+# The rules engine (internal/rules/engine.go) already computes the Run/Stop
+# transition + duration from live mindset/site/# data and publishes it here —
+# work_center + duration_seconds arrive ready-made, so this pipeline doesn't
+# need its own state_machine/duration nodes (Entry 130: they read fields
+# — current_value/event_id — this topic's payload never carries, so chaining
+# them here silently produced nothing).
 trigger:
   type: "mqtt"
   function: "mqtt_subscribe"
   config:
-    topic: "mindset/raw/ns=3;i=1014"
+    topic: "mindset/events/status-change"
     qos: 1
 
 nodes:
-  - id: "state_machine"
-    name: "State Machine"
-    type: "transform"
-    function: "state_machine"
-    config:
-      machine_id: "machine1"
-    depends_on: ["trigger"]
-
-  - id: "duration"
-    name: "Duration"
-    type: "calculate"
-    function: "calculate_duration"
-    config: {}
-    depends_on: ["state_machine"]
-
   - id: "threshold"
     name: "Threshold (30s-3min)"
     type: "condition"
@@ -34,15 +25,22 @@ nodes:
     config:
       min: 30
       max: 180
-    depends_on: ["duration"]
+    depends_on: ["trigger"]
 
-  - id: "mqtt_publish"
-    name: "Publish Micro-stop"
-    type: "output"
-    function: "mqtt_publish"
+  - id: "cost"
+    name: "Cost"
+    type: "calculate"
+    function: "calculate_cost"
     config:
-      topic: "mindset/events/micro-stop"
-      qos: 1
+      hourly_rate: 85.0
+      currency: "EUR"
     depends_on: ["threshold"]
 
-output: "mqtt_publish"
+# No mqtt_publish node — the output node's result auto-publishes (Entry 119).
+# calculate_cost is the terminal node (folded in here, Entry 130) so its
+# output already carries work_center/cost_eur/timestamp — everything
+# internal/kg/subscriber.go's onMicroStop needs, in one message. output_topic
+# is explicit (not derived) because it's load-bearing: the KG subscriber's
+# auto-enrichment is hardcoded to subscribe to exactly this topic.
+output: "cost"
+output_topic: "mindset/events/micro-stop"

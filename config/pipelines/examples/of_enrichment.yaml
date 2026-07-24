@@ -1,0 +1,47 @@
+id: "of_enrichment"
+name: "OF Enrichment (status-change -> current work order)"
+description: "Enrichit un événement de changement de statut avec l'OF en cours depuis l'ERP (sql_query). Nécessite la stack ERP de dev (docker-compose.dev-erp.yml up) et une connexion 'dev_erp' définie (config/connections.yaml, ou via la page Connexions) avec MINDSET_ERP_PASSWORD positionnée."
+version: "1.0"
+enabled: true
+
+trigger:
+  type: "mqtt"
+  function: "mqtt_subscribe"
+  config:
+    topic: "mindset/events/status-change"
+    qos: 1
+
+nodes:
+  - id: "fetch_current_of"
+    name: "Fetch current OF"
+    type: "connector"
+    function: "sql_query"
+    config:
+      connection_id: "dev_erp"
+      query: |
+        SELECT of_number, product_code, planned_qty, actual_qty, operator_id, started_at
+        FROM work_orders
+        WHERE work_center = :work_center AND status = 'RUNNING'
+        ORDER BY started_at DESC
+        LIMIT 1
+      params:
+        # Static placeholder, not a live binding: the pipeline engine has no
+        # {{ trigger.work_center }} templating yet (checked internal/pipeline —
+        # no {{ }} handling exists today; see docs/analysis_log.md Entry 79).
+        # Edit this to the work center you're demoing — the fake ERP seed data
+        # (sim/erp/seed.mysql.sql) runs machine1 / machine2 / machine3.
+        work_center: "machine1"
+      timeout_seconds: 15
+      limit: 1
+      canonical: "work_order"
+      field_map:
+        of_number: "of_number"
+        product_code: "product_code"
+        planned_qty: "planned_qty"
+        actual_qty: "actual_qty"
+        operator_id: "operator_id"
+    depends_on: ["trigger"]
+
+# No mqtt_publish node — the output node's result auto-publishes (Entry 119).
+output: "fetch_current_of"
+output_topic: "mindset/events/status-change-enriched"

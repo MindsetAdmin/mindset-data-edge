@@ -504,10 +504,11 @@ Total: ~3 weeks from today to first customer smoke test.
 ## 13. What comes after SQL (queue)
 
 1. **REST connectors** (V1.5) — modern MES/ERP APIs (SAP OData, Sage REST, Odoo)
-2. **Werum PAS-X connector** (V2) — pharma-mandatory; needs a Werum consultant + certification
-3. **SAP MII / RFC connector** (V2) — for the largest SAP customers who won't grant SQL access
-4. **AVEVA System Platform / OSIsoft PI connector** (V2) — historian access, complementary to real-time OPC-UA
-5. **CDC / change-data-capture** (V2) — Debezium-style, when customers want "notify me when this table changes" instead of polling
+2. **Pipeline suggestion engine** (V1.5) — DataOps Studio detects recurring patterns in the KG (repeat stops, quality clusters, supplier anomalies) and auto-proposes pipeline templates the user accepts with one click. Feature-borrow from LemonLime's *"self-creating automations"* — see Entry 67. Requires V1a+V1b populated first so there's data to reason over. Design constraint: precision > recall (hallucinated suggestions in industrial contexts cost money).
+3. **Werum PAS-X connector** (V2) — pharma-mandatory; needs a Werum consultant + certification
+4. **SAP MII / RFC connector** (V2) — for the largest SAP customers who won't grant SQL access
+5. **AVEVA System Platform / OSIsoft PI connector** (V2) — historian access, complementary to real-time OPC-UA
+6. **CDC / change-data-capture** (V2) — Debezium-style, when customers want "notify me when this table changes" instead of polling
 
 ---
 

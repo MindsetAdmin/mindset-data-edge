@@ -3,8 +3,10 @@
 // preview, and an OPC-UA machine/tag selector.
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import * as XLSX from 'xlsx';
 import PickerModal from './PickerModal';
+import SqlConfigPanel from './SqlConfigPanel';
 import { defaultConfigFor, triggerTypeFor } from '../lib/connectorTemplates';
 import { typeStyle, getCategory } from '../lib/functionMeta';
 import { functionDoc, fieldDoc } from '../lib/functionDocs';
@@ -19,12 +21,13 @@ function coerce(v) {
 }
 
 export default function NodeConfigPanel({ node, connectors = [], fieldPickers = {}, configDefaults = null, machines = [], onChange, onDelete, onClose }) {
+  const { t } = useTranslation();
   const [pickerKey, setPickerKey] = useState(null);
 
   if (!node) {
     return (
       <aside className="w-72 bg-dark-900 border-l border-dark-700 p-4 shrink-0">
-        <p className="text-sm text-dark-500">Sélectionnez un nœud pour le configurer.</p>
+        <p className="text-sm text-dark-500">{t('nodeConfig.selectNode')}</p>
       </aside>
     );
   }
@@ -56,7 +59,7 @@ export default function NodeConfigPanel({ node, connectors = [], fieldPickers = 
       delete c[key];
       return { ...d, config: c };
     });
-  const addKey = () => onChange(node.id, (d) => ({ ...d, config: { ...d.config, ['nouveau_champ']: '' } }));
+  const addKey = () => onChange(node.id, (d) => ({ ...d, config: { ...d.config, ['new_field']: '' } }));
 
   const pickConnector = (fnName) =>
     onChange(node.id, (d) => ({
@@ -71,16 +74,19 @@ export default function NodeConfigPanel({ node, connectors = [], fieldPickers = 
 
   const isOpcua = fn === 'opcua_read';
   const isCost = fn === 'calculate_cost';
+  const isSqlQuery = fn === 'sql_query';
   const hidden = isOpcua
     ? new Set(['tags', 'node_id', 'machine'])
     : isCost
     ? new Set(['hourly_rate', 'currency', 'rate_source', 'rate_tag', 'rates'])
+    : isSqlQuery
+    ? new Set(['connection_id', 'query', 'params', 'timeout_seconds', 'limit', 'canonical', 'field_map'])
     : new Set();
 
   return (
     <aside className="w-72 bg-dark-900 border-l border-dark-700 p-4 overflow-y-auto shrink-0">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-semibold text-blue-400">📋 Configuration</h3>
+        <h3 className="text-sm font-semibold text-blue-400">📋 {t('nodeConfig.title')}</h3>
         <button onClick={onClose} className="text-dark-400 hover:text-white text-lg leading-none">×</button>
       </div>
 
@@ -94,12 +100,12 @@ export default function NodeConfigPanel({ node, connectors = [], fieldPickers = 
         {doc.description && <p className="text-[11px] text-dark-300 mt-1.5">{doc.description}</p>}
       </div>
 
-      <Field label="ID du nœud">
+      <Field label={t('nodeConfig.nodeId')}>
         <input value={node.id} disabled className="input opacity-60" />
       </Field>
 
       {isTrigger ? (
-        <Field label="Connecteur" help="Source de données qui déclenche le pipeline.">
+        <Field label={t('nodeConfig.connector')} help={t('nodeConfig.connectorHelp')}>
           <select value={data.function || ''} onChange={(e) => pickConnector(e.target.value)} className="input">
             {data.function && !connectors.some((c) => c.name === data.function) && (
               <option value={data.function}>{data.function}</option>
@@ -110,7 +116,7 @@ export default function NodeConfigPanel({ node, connectors = [], fieldPickers = 
           </select>
         </Field>
       ) : (
-        <Field label="Nom" help="Nom affiché du nœud.">
+        <Field label={t('nodeConfig.name')} help={t('nodeConfig.nameHelp')}>
           <input value={data.name || ''} onChange={(e) => setField('name', e.target.value)} className="input" />
         </Field>
       )}
@@ -123,15 +129,18 @@ export default function NodeConfigPanel({ node, connectors = [], fieldPickers = 
         <CostConfig config={config} configDefaults={configDefaults} setConfig={setConfig} setConfigRaw={setConfigRaw} tagOptions={fieldPickers.node_id || []} />
       )}
 
+      {/* SQL query configuration */}
+      {isSqlQuery && <SqlConfigPanel config={config} setConfig={setConfig} setConfigRaw={setConfigRaw} />}
+
       {/* Config fields (labelled, with help + example) */}
       <div className="mt-4 mb-2 flex items-center justify-between">
-        <span className="text-xs font-semibold text-dark-300 uppercase tracking-wider">Paramètres</span>
-        <button onClick={addKey} className="text-xs text-blue-400 hover:text-blue-300">+ champ</button>
+        <span className="text-xs font-semibold text-dark-300 uppercase tracking-wider">{t('nodeConfig.parameters')}</span>
+        <button onClick={addKey} className="text-xs text-blue-400 hover:text-blue-300">+ {t('nodeConfig.field')}</button>
       </div>
 
       <div className="space-y-3">
         {Object.entries(config).filter(([k]) => !hidden.has(k)).length === 0 && (
-          <p className="text-xs text-dark-500">Aucun paramètre.</p>
+          <p className="text-xs text-dark-500">{t('nodeConfig.noParameters')}</p>
         )}
         {Object.entries(config)
           .filter(([k]) => !hidden.has(k))
@@ -158,9 +167,9 @@ export default function NodeConfigPanel({ node, connectors = [], fieldPickers = 
                     className="input flex-1 text-xs"
                   />
                   {hasPicker && (
-                    <button onClick={() => setPickerKey(key)} title="Choisir" className="text-dark-400 hover:text-blue-400 px-1">📋</button>
+                    <button onClick={() => setPickerKey(key)} title={t('nodeConfig.choose')} className="text-dark-400 hover:text-blue-400 px-1">📋</button>
                   )}
-                  <button onClick={() => removeKey(key)} title="Supprimer" className="text-dark-500 hover:text-red-400 px-1">×</button>
+                  <button onClick={() => removeKey(key)} title={t('common.delete')} className="text-dark-500 hover:text-red-400 px-1">×</button>
                 </div>
                 {fd.help && <p className="text-[10px] text-dark-500 mt-0.5">ⓘ {fd.help}</p>}
               </div>
@@ -173,16 +182,16 @@ export default function NodeConfigPanel({ node, connectors = [], fieldPickers = 
 
       {!isTrigger && onDelete && (
         <button onClick={() => onDelete(node.id)} className="mt-5 w-full bg-red-600/80 hover:bg-red-600 text-white text-sm px-3 py-1.5 rounded-md transition">
-          🗑️ Supprimer le nœud
+          🗑️ {t('nodeConfig.deleteNode')}
         </button>
       )}
 
       {pickerKey && (
         <PickerModal
-          title={`Choisir : ${fieldDoc(fn, pickerKey).label}`}
+          title={`${t('nodeConfig.choose')}: ${fieldDoc(fn, pickerKey).label}`}
           options={fieldPickers[pickerKey] || []}
           allowCustom
-          customLabel={`${pickerKey} personnalisé`}
+          customLabel={t('nodeConfig.customLabel', { key: pickerKey })}
           onSelect={(o) => { setConfig(pickerKey, o.value); setPickerKey(null); }}
           onClose={() => setPickerKey(null)}
         />
@@ -208,11 +217,12 @@ function Field({ label, help, children }) {
 
 // OPC-UA machine dropdown + tag checkbox list with filter, select-all, live values.
 function OpcuaTagSelector({ machines, config, setConfigRaw }) {
+  const { t } = useTranslation();
   const [q, setQ] = useState('');
   const selectedMachine = config.machine || machines[0]?.work_center || '';
   const machine = machines.find((m) => m.work_center === selectedMachine);
   const allTags = machine?.tags || [];
-  const tags = allTags.filter((t) => !q || (t.name || '').toLowerCase().includes(q.toLowerCase()));
+  const tags = allTags.filter((tg) => !q || (tg.name || '').toLowerCase().includes(q.toLowerCase()));
   const selected = new Set(config.tags || []);
 
   const applyTags = (arr) => {
@@ -229,7 +239,7 @@ function OpcuaTagSelector({ machines, config, setConfigRaw }) {
     <div className="mb-3 border border-dark-700 rounded-md p-2.5">
       <label className="block text-[11px] text-dark-400 uppercase tracking-wider mb-1">Machine</label>
       <select value={selectedMachine} onChange={(e) => setConfigRaw('machine', e.target.value)} className="input">
-        {machines.length === 0 && <option value="">(aucune machine découverte)</option>}
+        {machines.length === 0 && <option value="">{t('nodeConfig.noMachineDiscovered')}</option>}
         {machines.map((m) => (
           <option key={m.work_center} value={m.work_center}>
             {m.work_center} ({(m.tags || []).length} tags)
@@ -237,40 +247,41 @@ function OpcuaTagSelector({ machines, config, setConfigRaw }) {
         ))}
       </select>
 
-      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔍 filtrer les tags…" className="input mt-2 text-xs" />
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`🔍 ${t('nodeConfig.filterTags')}`} className="input mt-2 text-xs" />
       <div className="flex gap-3 mt-1">
-        <button onClick={() => applyTags(allTags.map((t) => t.node_id))} className="text-[11px] text-blue-400 hover:text-blue-300">Tout sélectionner</button>
-        <button onClick={() => applyTags([])} className="text-[11px] text-dark-400 hover:text-white">Tout désélectionner</button>
+        <button onClick={() => applyTags(allTags.map((tg) => tg.node_id))} className="text-[11px] text-blue-400 hover:text-blue-300">{t('nodeConfig.selectAll')}</button>
+        <button onClick={() => applyTags([])} className="text-[11px] text-dark-400 hover:text-white">{t('nodeConfig.deselectAll')}</button>
       </div>
 
       <div className="mt-2 max-h-48 overflow-y-auto space-y-1">
-        {tags.length === 0 && <p className="text-xs text-dark-500">Aucun tag (l'agent doit tourner).</p>}
-        {tags.map((t) => (
-          <label key={t.node_id} className="flex items-center gap-2 text-xs cursor-pointer">
-            <input type="checkbox" checked={selected.has(t.node_id)} onChange={() => toggle(t.node_id)} />
-            <span className="flex-1 truncate text-dark-200">{t.name || t.node_id}</span>
-            <span className="text-dark-500 font-mono">{String(t.value)}</span>
+        {tags.length === 0 && <p className="text-xs text-dark-500">{t('nodeConfig.noTagAgent')}</p>}
+        {tags.map((tg) => (
+          <label key={tg.node_id} className="flex items-center gap-2 text-xs cursor-pointer">
+            <input type="checkbox" checked={selected.has(tg.node_id)} onChange={() => toggle(tg.node_id)} />
+            <span className="flex-1 truncate text-dark-200">{tg.name || tg.node_id}</span>
+            <span className="text-dark-500 font-mono">{String(tg.value)}</span>
           </label>
         ))}
       </div>
-      <div className="text-[11px] text-dark-500 mt-1">{(config.tags || []).length} tag(s) sélectionné(s)</div>
+      <div className="text-[11px] text-dark-500 mt-1">{t('nodeConfig.tagsSelected', { count: (config.tags || []).length })}</div>
     </div>
   );
 }
 
 // Cost configuration: rate source (manual / from config / from tag) + currency.
 function CostConfig({ config, configDefaults, setConfig, setConfigRaw, tagOptions }) {
+  const { t } = useTranslation();
   const cfgRate = configDefaults?.cost?.hourly_rate ?? 85;
   const source = config.rate_source || 'manual';
   const setSource = (s) => {
     setConfigRaw('rate_source', s);
     if (s === 'config') setConfigRaw('hourly_rate', cfgRate);
   };
-  const labels = { manual: 'Manuel', config: 'Config', tag: 'Tag' };
+  const labels = { manual: t('nodeConfig.manual'), config: 'Config', tag: 'Tag' };
 
   return (
     <div className="mb-3 border border-dark-700 rounded-md p-2.5 space-y-2">
-      <label className="block text-[11px] text-dark-400 uppercase tracking-wider">Source du coût horaire</label>
+      <label className="block text-[11px] text-dark-400 uppercase tracking-wider">{t('nodeConfig.hourlyRateSource')}</label>
       <div className="flex gap-3 text-xs">
         {['manual', 'config', 'tag'].map((s) => (
           <label key={s} className="flex items-center gap-1 cursor-pointer">
@@ -288,20 +299,20 @@ function CostConfig({ config, configDefaults, setConfig, setConfigRaw, tagOption
       )}
       {source === 'config' && (
         <p className="text-xs text-dark-300">
-          Depuis <span className="font-mono">agent.yaml</span> : <span className="text-green-400">{cfgRate} €/h</span>
-          <button onClick={() => setSource('manual')} className="ml-2 text-blue-400 hover:text-blue-300">override</button>
+          {t('nodeConfig.fromAgentYaml')} <span className="font-mono">agent.yaml</span> : <span className="text-green-400">{cfgRate} €/h</span>
+          <button onClick={() => setSource('manual')} className="ml-2 text-blue-400 hover:text-blue-300">{t('nodeConfig.override')}</button>
         </p>
       )}
       {source === 'tag' && (
         <select value={config.rate_tag || ''} onChange={(e) => setConfigRaw('rate_tag', e.target.value)} className="input text-xs">
-          <option value="">(choisir un tag contenant le taux)</option>
+          <option value="">{t('nodeConfig.chooseRateTag')}</option>
           {tagOptions.map((o) => (
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>
       )}
 
-      <label className="block text-[11px] text-dark-400 uppercase tracking-wider">Devise</label>
+      <label className="block text-[11px] text-dark-400 uppercase tracking-wider">{t('nodeConfig.currency')}</label>
       <select value={config.currency || 'EUR'} onChange={(e) => setConfigRaw('currency', e.target.value)} className="input text-xs">
         <option>EUR</option>
         <option>USD</option>
@@ -316,6 +327,7 @@ function CostConfig({ config, configDefaults, setConfig, setConfigRaw, tagOption
 
 // Upload a CSV/Excel file with per-product rates → config.rates {product:{hourly_rate,cost_per_unit}}.
 function RateTableUpload({ config, setConfigRaw }) {
+  const { t } = useTranslation();
   const [err, setErr] = useState(null);
   const rates = config.rates || {};
   const count = Object.keys(rates).length;
@@ -341,29 +353,30 @@ function RateTableUpload({ config, setConfigRaw }) {
         table[product] = { hourly_rate: hr, cost_per_unit: cu };
       });
       if (Object.keys(table).length === 0) {
-        setErr('Aucune ligne valide (colonnes attendues : Product, Cost per Hour (€/h)).');
+        setErr(t('nodeConfig.noValidRow'));
         return;
       }
       setConfigRaw('rates', table);
       setErr(null);
     } catch (e2) {
-      setErr('Fichier illisible : ' + e2.message);
+      setErr(t('nodeConfig.unreadableFile') + ' ' + e2.message);
     }
   };
 
   return (
     <div className="pt-2 border-t border-dark-700">
-      <label className="block text-[11px] text-dark-400 uppercase tracking-wider mb-1">Tarifs par produit (CSV / Excel)</label>
+      <label className="block text-[11px] text-dark-400 uppercase tracking-wider mb-1">{t('nodeConfig.perProductRates')}</label>
       <input type="file" accept=".csv,.xlsx,.xls" onChange={onFile} className="text-[11px] text-dark-300 file:mr-2 file:text-xs file:bg-dark-700 file:text-white file:border-0 file:rounded file:px-2 file:py-1" />
-      {count > 0 && <p className="text-[11px] text-green-400 mt-1">✅ {count} produit(s) chargé(s) : {Object.keys(rates).slice(0, 4).join(', ')}{count > 4 ? '…' : ''}</p>}
+      {count > 0 && <p className="text-[11px] text-green-400 mt-1">✅ {t('nodeConfig.productsLoaded', { count })} : {Object.keys(rates).slice(0, 4).join(', ')}{count > 4 ? '…' : ''}</p>}
       {err && <p className="text-[11px] text-red-400 mt-1">❌ {err}</p>}
-      <p className="text-[10px] text-dark-500 mt-1">Le coût horaire par produit est choisi selon le champ <span className="font-mono">product</span> de l'événement (sinon, le taux ci-dessus).</p>
+      <p className="text-[10px] text-dark-500 mt-1">{t('nodeConfig.rateHint')} <span className="font-mono">product</span> {t('nodeConfig.rateHintPost')}</p>
     </div>
   );
 }
 
 // Live cost preview for typical durations.
 function CostPreview({ config, configDefaults }) {
+  const { t } = useTranslation();
   const rate = Number(config.hourly_rate ?? configDefaults?.cost?.hourly_rate ?? 85);
   const cur = config.currency || 'EUR';
   const rows = [
@@ -374,7 +387,7 @@ function CostPreview({ config, configDefaults }) {
   ];
   return (
     <div className="mt-3 bg-dark-950 border border-dark-700 rounded-md p-2.5">
-      <div className="text-[11px] text-dark-400 uppercase tracking-wider mb-1">Aperçu du coût ({rate} €/h)</div>
+      <div className="text-[11px] text-dark-400 uppercase tracking-wider mb-1">{t('nodeConfig.costPreview', { rate })}</div>
       {rows.map(([label, s]) => (
         <div key={label} className="flex justify-between text-xs py-0.5">
           <span className="text-dark-300">{label}</span>

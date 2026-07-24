@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
-import { RefreshCw, Network, Inbox, AlertCircle } from 'lucide-react';
+import { RefreshCw, Network, Inbox, AlertCircle, Check, X, ShieldQuestion } from 'lucide-react';
 import ForceGraph, { typesPresent, NODE_COLORS, FALLBACK_COLOR } from '../components/ForceGraph';
-import { fetchKG } from '../api/client';
+import { fetchKG, fetchPendingKGNodes, validateKGNode, rejectKGNode } from '../api/client';
 
 // Unified KG page (2026-07-02 merge). Single Cytoscape view over the merged
 // graph. Category filter (business / platform / all) replaces the old
@@ -20,6 +20,62 @@ export default function KnowledgeGraphPage() {
     const [error, setError] = useState(null);
     const [selected, setSelected] = useState(null);
     const [typeFilter, setTypeFilter] = useState('all');
+
+    // v0 structural bootstrap validation (Entry 95/96) — nodes auto-generated
+    // from OPC-UA discovery, awaiting a human accept/reject before they count
+    // as confirmed. Fetched independently of the graph itself.
+    const [pending, setPending] = useState([]);
+    const [pendingBusy, setPendingBusy] = useState(null); // node id currently being validated/rejected
+
+    // Plain async helper — deliberately NOT called from inside a useEffect body
+    // (that pattern trips react-hooks/set-state-in-effect); only ever invoked
+    // from event handlers below, where synchronous setState is fine.
+    async function refreshPending() {
+        try {
+            const data = await fetchPendingKGNodes();
+            setPending(data.nodes || []);
+        } catch {
+            // Best-effort — a failure here shouldn't block the rest of the page.
+            setPending([]);
+        }
+    }
+
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const data = await fetchPendingKGNodes();
+                if (!cancelled) setPending(data.nodes || []);
+            } catch {
+                if (!cancelled) setPending([]);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [reloadKey]);
+
+    const handleValidate = async (id) => {
+        setPendingBusy(id);
+        try {
+            await validateKGNode(id);
+            await refreshPending();
+            setReloadKey((k) => k + 1); // refresh the graph so the pending ring clears
+        } finally {
+            setPendingBusy(null);
+        }
+    };
+
+    const handleReject = async (id) => {
+        setPendingBusy(id);
+        try {
+            await rejectKGNode(id);
+            await refreshPending();
+            setReloadKey((k) => k + 1);
+        } finally {
+            setPendingBusy(null);
+        }
+    };
 
     useEffect(() => {
         let cancelled = false;
@@ -89,6 +145,59 @@ export default function KnowledgeGraphPage() {
                     <Stat label="Nodes" value={nodeCount} />
                     <Stat label="Edges" value={edgeCount} />
                 </div>
+
+                {pending.length > 0 && (
+                    <div>
+                        <h3 className="inline-flex items-center gap-1.5 text-11 text-status-warn uppercase tracking-wide mb-2">
+                            <ShieldQuestion size={12} strokeWidth={1.5} />
+                            <span>Pending validation ({pending.length})</span>
+                        </h3>
+                        <div className="space-y-1 max-h-48 overflow-y-auto pr-0.5">
+                            {pending.map((n) => (
+                                <div
+                                    key={n.id}
+                                    className="flex items-center justify-between gap-1.5 bg-panel-alt border border-border-subtle rounded px-2 py-1"
+                                >
+                                    <div className="min-w-0">
+                                        <div className="text-11 text-text-tertiary uppercase tracking-wide flex items-center gap-1.5">
+                                            <span>{n.type}</span>
+                                            {typeof n.properties?.confidence === 'number' && (
+                                                <span
+                                                    className="text-status-warn"
+                                                    title="Confidence score — below the auto-accept threshold, hence pending"
+                                                >
+                                                    {Math.round(n.properties.confidence * 100)}%
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div className="text-13 text-text-primary truncate" title={n.label}>{n.label}</div>
+                                    </div>
+                                    <div className="flex gap-1 shrink-0">
+                                        <button
+                                            onClick={() => handleValidate(n.id)}
+                                            disabled={pendingBusy === n.id}
+                                            title="Accept"
+                                            className="p-1 rounded bg-status-running/15 text-status-running hover:bg-status-running/25 disabled:opacity-40 transition-colors"
+                                        >
+                                            <Check size={12} strokeWidth={2} />
+                                        </button>
+                                        <button
+                                            onClick={() => handleReject(n.id)}
+                                            disabled={pendingBusy === n.id}
+                                            title="Reject"
+                                            className="p-1 rounded bg-status-stopped/15 text-status-stopped hover:bg-status-stopped/25 disabled:opacity-40 transition-colors"
+                                        >
+                                            <X size={12} strokeWidth={2} />
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                        <p className="text-11 text-text-tertiary mt-1.5 leading-relaxed">
+                            Auto-generated from OPC-UA discovery — accept or reject before treating as confirmed structure.
+                        </p>
+                    </div>
+                )}
 
                 <div>
                     <h3 className="text-11 text-text-secondary uppercase tracking-wide mb-2">Type filter</h3>

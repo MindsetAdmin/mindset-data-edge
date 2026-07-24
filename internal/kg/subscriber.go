@@ -16,11 +16,18 @@ type KGSubscriber struct {
 	kg     *KnowledgeGraph
 }
 
-// NewKGSubscriber crée un nouveau subscriber KG
-func NewKGSubscriber(brokerURL string, kg *KnowledgeGraph) (*KGSubscriber, error) {
+// NewKGSubscriber crée un nouveau subscriber KG. clientID must be unique per
+// process — cmd/server and cmd/agent can both run a KGSubscriber at the same
+// time (both listen to mindset/events/micro-stop), and MQTT disconnects
+// whichever client already holds a given ClientID the moment a second client
+// connects with the same one. A shared hardcoded ID here meant the two
+// processes' subscribers silently fought over the connection and kicked each
+// other off — messages published while a subscriber had just been evicted
+// were never seen, with no error anywhere (Entry 130/131).
+func NewKGSubscriber(brokerURL, clientID string, kg *KnowledgeGraph) (*KGSubscriber, error) {
 	opts := paho.NewClientOptions().
 		AddBroker(brokerURL).
-		SetClientID("mindset-kg-subscriber").
+		SetClientID(clientID).
 		SetAutoReconnect(true)
 
 	client := paho.NewClient(opts)

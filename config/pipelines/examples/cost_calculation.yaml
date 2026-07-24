@@ -21,13 +21,6 @@ nodes:
       currency: "EUR"
     depends_on: ["trigger"]
 
-  - id: "mqtt_publish"
-    name: "Publish Cost"
-    type: "output"
-    function: "mqtt_publish"
-    config:
-      topic: "mindset/events/micro-stop-cost"
-      qos: 1
-    depends_on: ["cost"]
-
-output: "mqtt_publish"
+# No mqtt_publish node — the output node's result auto-publishes (Entry 119).
+output: "cost"
+output_topic: "mindset/events/micro-stop-cost"

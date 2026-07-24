@@ -45,6 +45,14 @@ type Pipeline struct {
 	Trigger     Trigger                `json:"trigger" yaml:"trigger"`
 	Nodes       []Node                 `json:"nodes" yaml:"nodes"`
 	Output      string                 `json:"output" yaml:"output"` // ID du nœud de sortie
+	// OutputTopic, if set, is where the Output node's result is auto-published
+	// after a successful run (see cmd/server's publishPipelineOutput) — no
+	// mqtt_publish node needed. Explicit rather than always-derived because
+	// some topic names are load-bearing (internal/kg/subscriber.go's hardcoded
+	// mindset/events/micro-stop subscription, and pipelines chained purely by
+	// one's output topic matching another's trigger topic — see
+	// docs/analysis_log.md Entry 119). Omit it and a topic is derived instead.
+	OutputTopic string `json:"output_topic,omitempty" yaml:"output_topic,omitempty"`
 	CreatedAt   time.Time              `json:"created_at" yaml:"-"`  // runtime-only, never persisted to YAML
 	UpdatedAt   time.Time              `json:"updated_at" yaml:"-"`  // runtime-only, never persisted to YAML
 }

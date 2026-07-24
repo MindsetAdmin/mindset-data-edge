@@ -6,9 +6,7 @@ const FUNCTION_DEFAULTS = {
   threshold: { min: 30, max: 180 },
   calculate_cost: { hourly_rate: 85, currency: 'EUR' },
   calculate_duration: {},
-  uns_mapper: { site_id: 'local-test', area: 'area1' },
   filter: { field: 'value', operator: 'gt', value: 0 },
-  mqtt_publish: { topic: 'mindset/events/micro-stop', qos: 1 },
   add_to_dashboard: { label: 'Mon widget', kind: 'value' },
 };
 

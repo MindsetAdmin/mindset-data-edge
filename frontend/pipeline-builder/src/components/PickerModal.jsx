@@ -1,10 +1,13 @@
 import { useState, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 
 // Generic searchable picker modal. Options: { value, label, sub, badge, group }.
 // The user CHOOSES from available options (search + select) — never free-types.
-export default function PickerModal({ title, options = [], onSelect, onClose, allowCustom = false, customLabel = 'Valeur personnalisée' }) {
+export default function PickerModal({ title, options = [], onSelect, onClose, allowCustom = false, customLabel }) {
+  const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const [custom, setCustom] = useState('');
+  const resolvedCustomLabel = customLabel || t('pickerModal.defaultCustomLabel');
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim();
@@ -40,13 +43,13 @@ export default function PickerModal({ title, options = [], onSelect, onClose, al
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="🔍 Rechercher…"
+            placeholder={`🔍 ${t('common.search')}`}
             className="w-full bg-dark-950 border border-dark-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
           />
         </div>
 
         <div className="flex-1 overflow-y-auto p-3 space-y-3">
-          {groups.length === 0 && <p className="text-sm text-dark-500 px-1">Aucun résultat.</p>}
+          {groups.length === 0 && <p className="text-sm text-dark-500 px-1">{t('pickerModal.noResults')}</p>}
           {groups.map(([group, items]) => (
             <div key={group}>
               {group && <div className="text-[11px] text-dark-400 uppercase tracking-wider mb-1 px-1">{group}</div>}
@@ -78,14 +81,14 @@ export default function PickerModal({ title, options = [], onSelect, onClose, al
             <input
               value={custom}
               onChange={(e) => setCustom(e.target.value)}
-              placeholder={customLabel}
+              placeholder={resolvedCustomLabel}
               className="flex-1 bg-dark-950 border border-dark-700 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
             />
             <button
               onClick={() => custom.trim() && onSelect({ value: custom.trim(), label: custom.trim() })}
               className="bg-blue-600 hover:bg-blue-500 text-white text-sm px-3 py-2 rounded-md transition"
             >
-              Utiliser
+              {t('pickerModal.use')}
             </button>
           </div>
         )}

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import ReactFlow, {
   Background,
   Controls,
@@ -29,7 +30,7 @@ import {
   fetchOpcuaSelections,
 } from '../api/client';
 import { getCategory } from '../lib/functionMeta';
-import { defaultConfigFor, triggerTypeFor } from '../lib/connectorTemplates';
+import { defaultConfigFor, triggerTypeFor, MID_PIPELINE_CONNECTORS } from '../lib/connectorTemplates';
 import { defaultFunctionConfig } from '../lib/functionDefaults';
 import {
   flowToPipeline,
@@ -46,6 +47,7 @@ const nodeTypes = { pipelineNode: PipelineNode, triggerNode: TriggerNode, zoneNo
 const makeInitialNodes = () => [...makeZoneNodes(), makeTriggerNode()];
 
 function BuilderInner() {
+  const { t } = useTranslation();
   // Read initial canvas state once at mount — no subscription, avoids re-render loop.
   const { canvasNodes: initNodes, canvasEdges: initEdges, canvasMeta: initMeta } = useStudioStore.getState();
 
@@ -124,15 +126,15 @@ function BuilderInner() {
         .map((x) => ({
           value: x.work_center,
           label: x.work_center,
-          sub: x.state ? (x.state.running ? 'Running ✅' : 'Stopped ❌') : `${x.tags.length} tags`,
+          sub: x.state ? (x.state.running ? `${t('dashboard.running')} ✅` : `${t('dashboard.stopped')} ❌`) : `${x.tags.length} tags`,
           badge: govern ? 'ISA-95' : undefined,
         }));
       node_id = (m.machines || []).flatMap((x) =>
-        (x.tags || []).map((t) => ({
-          value: t.node_id,
-          label: t.name || t.node_id,
-          sub: `valeur: ${t.value} · ${t.data_type}`,
-          badge: t.node_id,
+        (x.tags || []).map((tag) => ({
+          value: tag.node_id,
+          label: tag.name || tag.node_id,
+          sub: `${t('builder.value')}: ${tag.value} · ${tag.data_type}`,
+          badge: tag.node_id,
           group: x.work_center,
         }))
       );
@@ -142,12 +144,12 @@ function BuilderInner() {
     try {
       const tp = await fetchTopics();
       topic = (tp.topics || [])
-        .filter((t) => t.category !== 'raw')
-        .map((t) => ({
-          value: t.topic,
-          label: t.topic,
-          sub: `${t.rate_per_sec.toFixed(1)} msg/s`,
-          group: t.category,
+        .filter((tpc) => tpc.category !== 'raw')
+        .map((tpc) => ({
+          value: tpc.topic,
+          label: tpc.topic,
+          sub: `${tpc.rate_per_sec.toFixed(1)} msg/s`,
+          group: tpc.category,
         }));
     } catch { /* best-effort */ }
     // Broker from agent.yaml.
@@ -156,7 +158,7 @@ function BuilderInner() {
       setConfigDefaults(c);
       if (c.mqtt?.broker) broker = [{ value: c.mqtt.broker, label: c.mqtt.broker, badge: 'config' }];
     } catch { /* best-effort */ }
-    if (broker.length === 0) broker = [{ value: 'tcp://localhost:1883', label: 'tcp://localhost:1883', badge: 'défaut' }];
+    if (broker.length === 0) broker = [{ value: 'tcp://localhost:1883', label: 'tcp://localhost:1883', badge: t('builder.default') }];
     setFieldPickers({ machine_id, topic, broker, node_id });
   }
 
@@ -238,17 +240,21 @@ function BuilderInner() {
   const selectedNode = nodes.find((n) => n.id === selectedId) || null;
   const connectors = functions.filter((f) => f.type === 'connector');
   const functionPickerOptions = functions
-    .filter((f) => f.type !== 'connector')
+    .filter((f) => f.type !== 'connector' || MID_PIPELINE_CONNECTORS.has(f.name))
     .map((f) => ({ value: f.name, label: f.name, sub: f.description, group: getCategory(f.type), fnType: f.type }));
 
   function addFunctionNode(o) {
     const id = `${slugify(o.value)}_${Math.random().toString(36).slice(2, 7)}`;
+    // Mirrors onDrop's branching: sql_query is the one connector this picker
+    // can offer (MID_PIPELINE_CONNECTORS), so it needs the connector-template
+    // defaults (connection_id, query, ...), not the transform/calculate ones.
+    const config = o.fnType === 'connector' ? defaultConfigFor(o.value) : defaultFunctionConfig(o.value);
     setNodes((nds) =>
       nds.concat({
         id,
         type: 'pipelineNode',
         position: { x: 300 + Math.random() * 160, y: 90 + Math.random() * 240 },
-        data: { name: o.value, type: o.fnType, function: o.value, config: defaultFunctionConfig(o.value), category: getCategory(o.fnType) },
+        data: { name: o.value, type: o.fnType, function: o.value, config, category: getCategory(o.fnType) },
       })
     );
     setShowFnPicker(false);
@@ -260,25 +266,29 @@ function BuilderInner() {
 
   // Smart, actionable validation. Returns an error string or null.
   function validate() {
-    if (!meta.name) return '❌ Veuillez donner un titre à votre pipeline (ex: "Micro-stop Detection").';
-    if (!meta.id) return '❌ Veuillez donner un nom à votre pipeline. Le nom sera utilisé comme identifiant unique.';
+    if (!meta.name) return `❌ ${t('builder.validateTitle')}`;
+    if (!meta.id) return `❌ ${t('builder.validateName')}`;
 
     const trigger = nodes.find((n) => n.type === 'triggerNode');
-    if (!trigger || !trigger.data.function) return '❌ Aucun connecteur (trigger) trouvé. Veuillez ajouter un connecteur dans la zone ENTRÉE.';
+    if (!trigger || !trigger.data.function) return `❌ ${t('builder.validateNoTrigger')}`;
     if (trigger.data.function === 'mqtt_subscribe' && !trigger.data.config?.topic)
-      return '❌ Veuillez sélectionner un topic pour "mqtt_subscribe".';
+      return `❌ ${t('builder.validateMqttTopic')}`;
     if (trigger.data.function === 'opcua_read' && !(trigger.data.config?.tags?.length || trigger.data.config?.node_id))
-      return '❌ Veuillez sélectionner au moins un tag pour "opcua_read".';
+      return `❌ ${t('builder.validateOpcuaTagTrigger')}`;
 
+    // No explicit output-type node is required anymore — the pipeline's
+    // terminal node (whichever step has no outgoing edge, computed by
+    // pipelineMapping.js) auto-publishes its result to MQTT (Entry 119).
+    // add_to_dashboard remains optional, for an extra dashboard pin on top.
     const steps = nodes.filter((n) => n.type === 'pipelineNode');
-    if (!steps.some((n) => n.data.type === 'output'))
-      return '❌ Aucune sortie trouvée. Veuillez ajouter "mqtt_publish" ou "add_to_dashboard" dans la zone SORTIE.';
+    if (steps.length === 0)
+      return `❌ ${t('builder.validateNoSteps')}`;
 
     for (const n of steps) {
       if (n.data.function === 'state_machine' && !n.data.config?.machine_id)
-        return '❌ Veuillez sélectionner une machine pour "state_machine".';
+        return `❌ ${t('builder.validateStateMachine')}`;
       if (n.data.function === 'opcua_read' && !(n.data.config?.tags?.length || n.data.config?.node_id))
-        return '❌ Veuillez sélectionner au moins un tag pour "opcua_read".';
+        return `❌ ${t('builder.validateOpcuaTagStep')}`;
     }
     return null;
   }
@@ -294,7 +304,7 @@ function BuilderInner() {
     try {
       const pipeline = flowToPipeline({ ...meta, version: '1.0', nodes, edges });
       await createPipeline(pipeline);
-      setStatus({ type: 'ok', msg: `✅ Pipeline « ${meta.name} » sauvegardé — visible dans le Knowledge Graph.` });
+      setStatus({ type: 'ok', msg: `✅ ${t('builder.savedMsg', { name: meta.name })}` });
       refreshPipelines();
     } catch (err) {
       setStatus({ type: 'error', msg: err.message });
@@ -327,7 +337,7 @@ function BuilderInner() {
     setEdges(flow.edges);
     setMeta({ id: p.id, name: p.name, description: p.description || '' });
     setSelectedId(null);
-    setStatus({ type: 'ok', msg: `Pipeline « ${p.id} » chargé — reconfigurer les entrées/sorties.` });
+    setStatus({ type: 'ok', msg: t('builder.loadedMsg', { name: p.id }) });
   }
 
   function handleNew() {
@@ -341,10 +351,10 @@ function BuilderInner() {
 
   async function handleRun() {
     if (!meta.id) {
-      setStatus({ type: 'error', msg: 'Sauvegardez le pipeline avant de l’exécuter.' });
+      setStatus({ type: 'error', msg: t('builder.saveBeforeRun') });
       return;
     }
-    setStatus({ type: 'pending', msg: 'Exécution…' });
+    setStatus({ type: 'pending', msg: t('pipelines.running') });
     try {
       const res = await runPipeline(meta.id);
       const byNode = {};
@@ -355,7 +365,7 @@ function BuilderInner() {
       const okCount = (res.nodes || []).filter((n) => n.status === 'success').length;
       setStatus({
         type: res.status === 'success' ? 'ok' : 'error',
-        msg: `Exécution : ${res.status} — ${okCount}/${(res.nodes || []).length} nœuds OK`,
+        msg: `${t('common.run')}: ${res.status} — ${okCount}/${(res.nodes || []).length} ${t('builder.nodesOkShort')}`,
       });
     } catch (e) {
       setStatus({ type: 'error', msg: e.message });
@@ -376,7 +386,7 @@ function BuilderInner() {
           : {}),
       },
     }));
-    setStatus({ type: 'ok', msg: `Connecteur « ${pendingConnector.name} » appliqué au trigger.` });
+    setStatus({ type: 'ok', msg: t('builder.connectorAppliedMsg', { name: pendingConnector.name }) });
     clearPending();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingConnector]);
@@ -390,14 +400,14 @@ function BuilderInner() {
     setEdges(flow.edges);
     setMeta({ id: p.id, name: p.name, description: p.description || '' });
     setSelectedId(null);
-    setStatus({ type: 'ok', msg: `Pipeline « ${p.name || p.id} » chargé — reconfigurer les entrées/sorties.` });
+    setStatus({ type: 'ok', msg: t('builder.loadedMsg', { name: p.name || p.id }) });
     clearPending();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pipelineToLoad]);
 
   return (
     <div className="flex h-full">
-      <Palette functions={functions.filter((f) => f.type !== 'connector')} loading={loading} error={error} />
+      <Palette functions={functions.filter((f) => f.type !== 'connector' || MID_PIPELINE_CONNECTORS.has(f.name))} loading={loading} error={error} />
 
       <div className="flex-1 flex flex-col min-w-0">
         {/* Toolbar */}
@@ -405,7 +415,7 @@ function BuilderInner() {
           <input
             value={meta.name}
             onChange={(e) => handleNameChange(e.target.value)}
-            placeholder="Nom du pipeline"
+            placeholder={t('builder.pipelineName')}
             className="bg-dark-950 border border-dark-700 rounded-md px-3 py-1.5 text-sm w-48 focus:outline-none focus:border-blue-500"
           />
           <input
@@ -418,25 +428,25 @@ function BuilderInner() {
             onClick={handleSave}
             className="bg-blue-600 hover:bg-blue-500 text-white text-sm px-4 py-1.5 rounded-md transition"
           >
-            💾 Sauvegarder
+            💾 {t('common.save')}
           </button>
           <button
             onClick={handleRun}
             className="bg-green-600 hover:bg-green-500 text-white text-sm px-4 py-1.5 rounded-md transition"
           >
-            ▶️ Exécuter
+            ▶️ {t('common.run')}
           </button>
           <button
             onClick={() => setShowFnPicker(true)}
             className="bg-dark-700 hover:bg-dark-600 text-white text-sm px-3 py-1.5 rounded-md transition"
           >
-            ➕ Fonction
+            ➕ {t('builder.function')}
           </button>
           <button
             onClick={handleNew}
             className="bg-dark-700 hover:bg-dark-600 text-white text-sm px-3 py-1.5 rounded-md transition"
           >
-            ✨ Nouveau
+            ✨ {t('builder.new')}
           </button>
 
           <select
@@ -444,7 +454,7 @@ function BuilderInner() {
             value=""
             className="bg-dark-950 border border-dark-700 rounded-md px-3 py-1.5 text-sm text-dark-300 focus:outline-none focus:border-blue-500"
           >
-            <option value="">📂 Charger…</option>
+            <option value="">📂 {t('builder.loadEllipsis')}</option>
             {pipelines.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
@@ -497,7 +507,7 @@ function BuilderInner() {
 
       {showFnPicker && (
         <PickerModal
-          title="⚙️ Ajouter une fonction"
+          title={`⚙️ ${t('builder.addFunction')}`}
           options={functionPickerOptions}
           onSelect={addFunctionNode}
           onClose={() => setShowFnPicker(false)}
@@ -507,24 +517,24 @@ function BuilderInner() {
       {dupModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setDupModal(null)}>
           <div className="bg-dark-900 border border-dark-700 rounded-xl w-full max-w-md p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-white font-semibold mb-2">⚠️ Pipeline en double</h3>
+            <h3 className="text-white font-semibold mb-2">⚠️ {t('builder.duplicateTitle')}</h3>
             <p className="text-sm text-dark-300 mb-4">
-              Une pipeline avec cette configuration existe déjà : « {dupModal.existing.name} ».
+              {t('builder.duplicateBody', { name: dupModal.existing.name })}
             </p>
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => { setMeta((m) => ({ ...m, id: dupModal.existing.id, name: dupModal.existing.name })); setDupModal(null); doSave(); }}
                 className="bg-dark-700 hover:bg-dark-600 text-white text-sm px-3 py-1.5 rounded-md"
               >
-                Modifier l'existante
+                {t('builder.editExisting')}
               </button>
               <button
-                onClick={() => { const s = `${meta.id}_v2`; setMeta((m) => ({ ...m, id: s, name: `${m.name} v2` })); setDupModal(null); setStatus({ type: 'pending', msg: 'Renommée — cliquez Sauvegarder.' }); }}
+                onClick={() => { const s = `${meta.id}_v2`; setMeta((m) => ({ ...m, id: s, name: `${m.name} v2` })); setDupModal(null); setStatus({ type: 'pending', msg: t('builder.renamedMsg') }); }}
                 className="bg-blue-600 hover:bg-blue-500 text-white text-sm px-3 py-1.5 rounded-md"
               >
-                Nouvelle version
+                {t('builder.newVersion')}
               </button>
-              <button onClick={() => setDupModal(null)} className="text-dark-400 hover:text-white text-sm px-3 py-1.5">Annuler</button>
+              <button onClick={() => setDupModal(null)} className="text-dark-400 hover:text-white text-sm px-3 py-1.5">{t('common.cancel')}</button>
             </div>
           </div>
         </div>

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { fetchStats, fetchKnowledgeGraph, fetchMachines, fetchConfig } from '../api/client';
+import { useTranslation } from 'react-i18next';
+import { fetchStats, fetchKnowledgeGraph, fetchMachines, fetchConfig, fetchActiveProduction } from '../api/client';
 import { buildEvents, effectiveCost, splitDays, deltaPct, groupByMachine } from '../lib/dashboardData';
 import { useLiveSocket } from '../lib/useLiveSocket';
 import LiveDataPanel from '../components/LiveDataPanel';
@@ -11,10 +12,12 @@ import { useStudioStore } from '../store/studioStore';
 const FALLBACK_MS = 20000; // safety heartbeat; real-time comes from the WebSocket
 
 export default function DashboardPage() {
+  const { t } = useTranslation();
   const [stats, setStats] = useState(null);
   const [events, setEvents] = useState([]);
   const [machines, setMachines] = useState([]);
   const [config, setConfig] = useState(null);
+  const [activeProduction, setActiveProduction] = useState([]);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [error, setError] = useState(null);
   const refreshRef = useRef(null);
@@ -36,6 +39,15 @@ export default function DashboardPage() {
       setError(null);
     } catch (e) {
       setError(e.message);
+    }
+    // Separate try/catch: no validated ERP mapping (or no connection at all)
+    // is a normal, expected state, not a dashboard-wide error — shouldn't
+    // blank out the rest of the page.
+    try {
+      const ap = await fetchActiveProduction();
+      setActiveProduction(ap.active || []);
+    } catch {
+      setActiveProduction([]);
     }
   }
   refreshRef.current = refresh;
@@ -96,30 +108,30 @@ export default function DashboardPage() {
         {/* Header */}
         <div className="bg-dark-900 border border-dark-700 rounded-lg px-4 py-3 flex flex-wrap items-center gap-x-8 gap-y-1 text-sm">
           
-          <span className="text-dark-400">Site : <span className="text-dark-200">{config?.site?.name || config?.site?.id || ''}</span></span>
+          <span className="text-dark-400">{t('dashboard.site')} : <span className="text-dark-200">{config?.site?.name || config?.site?.id || ''}</span></span>
           <span className="text-dark-400">
-            Statut : <span className={brokerConnected ? 'text-green-400' : 'text-red-400'}>{brokerConnected ? '🟢 Connecté' : '🔴 Déconnecté'}</span>
+            {t('dashboard.status')} : <span className={brokerConnected ? 'text-green-400' : 'text-red-400'}>{brokerConnected ? `🟢 ${t('dashboard.connectedState')}` : `🔴 ${t('dashboard.disconnectedState')}`}</span>
           </span>
           <span className="text-dark-400">Uptime : <span className="text-dark-200">{fmtDuration(stats?.uptime_seconds)}</span></span>
           <span className={`ml-auto inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${connected ? 'bg-green-500/15 text-green-400' : 'bg-dark-700 text-dark-400'}`}>
             <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-green-400 animate-pulse' : 'bg-dark-500'}`} />
-            {connected ? 'LIVE' : 'hors-ligne'}
+            {connected ? 'LIVE' : t('dashboard.offline')}
           </span>
-          <span className="text-dark-400">MàJ : {lastUpdate ? lastUpdate.toLocaleTimeString() : ''}</span>
+          <span className="text-dark-400">{t('dashboard.lastUpdate')} : {lastUpdate ? lastUpdate.toLocaleTimeString() : ''}</span>
         </div>
 
         {error && (
           <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-3 text-red-400 text-sm">
-            ❌ {error} le serveur API tourne-t-il sur :8080 ?
+            ❌ {error} {t('overview.serverDownHint')}
           </div>
         )}
 
         {/* KPI cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <Kpi icon="🔴" label="Micro-stops" value={stopsToday} unit="aujourd'hui" delta={deltaPct(stopsToday, stopsYest)} invert />
-          <Kpi icon="💰" label="Coût total" value={`${costToday.toFixed(2)} €`} unit="aujourd'hui" delta={deltaPct(costToday, costYest)} invert />
-          <Kpi icon="⏱️" label="Temps perdu" value={fmtDuration(downtimeToday)} unit="aujourd'hui" delta={deltaPct(downtimeToday, downtimeYest)} invert />
-          <Kpi icon="📈" label="Disponibilité" value={`${availability.toFixed(1)}%`} unit="TRS (dispo.)" />
+          <Kpi icon="🔴" label="Micro-stops" value={stopsToday} unit={t('dashboard.today')} delta={deltaPct(stopsToday, stopsYest)} invert />
+          <Kpi icon="💰" label={t('dashboard.totalCost')} value={`${costToday.toFixed(2)} €`} unit={t('dashboard.today')} delta={deltaPct(costToday, costYest)} invert />
+          <Kpi icon="⏱️" label={t('dashboard.timeLost')} value={fmtDuration(downtimeToday)} unit={t('dashboard.today')} delta={deltaPct(downtimeToday, downtimeYest)} invert />
+          <Kpi icon="📈" label={t('dashboard.availability')} value={`${availability.toFixed(1)}%`} unit={t('dashboard.trsProxy')} />
         </div>
 
         {/* Widgets pinned via the add_to_dashboard function */}
@@ -130,9 +142,9 @@ export default function DashboardPage() {
 
         {/* Events + Machines */}
         <div className="grid lg:grid-cols-2 gap-5">
-          <Panel title="📋 Derniers événements">
+          <Panel title={`📋 ${t('dashboard.recentEvents')}`}>
             {events.length === 0 ? (
-              <Empty text="Aucun événement." />
+              <Empty text={t('dashboard.noEvents')} />
             ) : (
               <div className="divide-y divide-dark-800">
                 {events.slice(0, 8).map((e) => (
@@ -141,7 +153,7 @@ export default function DashboardPage() {
                       {e.createdAt ? new Date(e.createdAt).toLocaleTimeString().slice(0, 5) : ''}
                     </span>
                     <span className="text-white w-24 truncate">{e.workCenter}</span>
-                    <span className="text-amber-400 text-xs">Micro-stop {e.duration.toFixed(0)}s</span>
+                    <span className="text-amber-400 text-xs">{t('dashboard.microStop')} {e.duration.toFixed(0)}s</span>
                     <span className="text-dark-400 text-xs ml-auto">{e.cause || ''}</span>
                     <span className="text-green-400 text-xs font-mono w-20 text-right">{effectiveCost(e, hourly).toFixed(2)} €</span>
                   </div>
@@ -150,11 +162,11 @@ export default function DashboardPage() {
             )}
           </Panel>
 
-          <Panel title="🏭 Statut machines (per-machine  today)">
+          <Panel title={`🏭 ${t('dashboard.machineStatus')}`}>
             {perMachineRows.length === 0 ? (
               <Empty text={selectedMachines.length === 0
-                ? "Aucune machine."
-                : "Aucune machine sélectionnée active."} />
+                ? t('dashboard.noMachines')
+                : t('dashboard.noMachineSelectedActive')} />
             ) : (
               <DenseTable
                 columns={[
@@ -166,7 +178,7 @@ export default function DashboardPage() {
                     width: '18%',
                     render: (running) => {
                       const state = running == null ? 'idle' : running ? 'running' : 'stopped';
-                      const label = running == null ? 'n/a' : running ? 'Running' : 'Stopped';
+                      const label = running == null ? 'n/a' : running ? t('dashboard.running') : t('dashboard.stopped');
                       return <StatusDot state={state} pulse={running === true} label={label} />;
                     },
                   },
@@ -226,8 +238,37 @@ export default function DashboardPage() {
           </Panel>
         </div>
 
+        {/* Live ERP production context (Entry 120) — only renders once a
+            work_order SchemaMapping has been discovered and validated. */}
+        {activeProduction.length > 0 && (
+          <Panel title={`🔗 ${t('dashboard.activeProduction')}`}>
+            <DenseTable
+              columns={[
+                { key: 'work_center', label: 'Machine', align: 'left', width: '20%' },
+                { key: 'product_id', label: t('dashboard.product'), align: 'left', width: '20%' },
+                { key: 'order_id', label: 'OF', align: 'left', width: '20%', mono: true },
+                { key: 'status', label: t('dashboard.statusCol'), align: 'left', width: '15%' },
+                {
+                  key: 'equipment_id',
+                  label: t('dashboard.otLink'),
+                  align: 'left',
+                  width: '25%',
+                  render: (equipmentId) =>
+                    equipmentId ? (
+                      <span className="text-status-running text-xs" title={equipmentId}>🔗 {t('dashboard.linked')}</span>
+                    ) : (
+                      <span className="text-text-muted text-xs" title={t('dashboard.noOtNodeMatch')}>{t('dashboard.notLinked')}</span>
+                    ),
+                },
+              ]}
+              rows={activeProduction}
+              getRowKey={(row) => `${row.connection_id}-${row.order_id}`}
+            />
+          </Panel>
+        )}
+
         {/* Gantt */}
-        <Panel title="📊 Timeline machines">
+        <Panel title={`📊 ${t('dashboard.machineTimeline')}`}>
           <Gantt machines={filteredMachines} />
         </Panel>
       </div>
@@ -254,6 +295,7 @@ function tagValue(tags, contains) {
 }
 
 function Kpi({ icon, label, value, unit, delta, invert }) {
+  const { t } = useTranslation();
   let deltaEl = null;
   if (delta != null && isFinite(delta)) {
     const up = delta > 0;
@@ -261,7 +303,7 @@ function Kpi({ icon, label, value, unit, delta, invert }) {
     const good = invert ? !up : up;
     deltaEl = (
       <div className={`text-[11px] ${good ? 'text-green-400' : 'text-red-400'}`}>
-        {up ? '▲' : '▼'} {Math.abs(delta).toFixed(0)}% vs hier
+        {up ? '▲' : '▼'} {Math.abs(delta).toFixed(0)}% {t('dashboard.vsYesterday')}
       </div>
     );
   }
@@ -291,10 +333,11 @@ function Empty({ text }) {
 
 // Gantt: reconstructs Running/Stopped segments from each machine's state history.
 function Gantt({ machines }) {
+  const { t } = useTranslation();
   const now = Date.now();
   const withState = machines.filter((m) => m.state);
   if (withState.length === 0) {
-    return <Empty text="Pas d'historique de transitions." />;
+    return <Empty text={t('dashboard.noTransitionHistory')} />;
   }
 
   // Window start = earliest transition, or 1h ago.
@@ -320,7 +363,7 @@ function Gantt({ machines }) {
                   key={i}
                   className={s.running ? 'bg-green-500/70' : 'bg-red-500/70'}
                   style={{ width: `${((s.to - s.from) / span) * 100}%` }}
-                  title={`${s.running ? 'Running' : 'Stopped'} ${Math.round((s.to - s.from) / 1000)}s`}
+                  title={`${s.running ? t('dashboard.running') : t('dashboard.stopped')} ${Math.round((s.to - s.from) / 1000)}s`}
                 />
               ))}
             </div>
@@ -328,8 +371,8 @@ function Gantt({ machines }) {
         );
       })}
       <div className="flex gap-4 text-[11px] text-dark-400 pt-1">
-        <span>🟢 Running</span>
-        <span>🔴 Stopped</span>
+        <span>🟢 {t('dashboard.running')}</span>
+        <span>🔴 {t('dashboard.stopped')}</span>
         <span className="ml-auto">{new Date(start).toLocaleTimeString().slice(0, 5)} → {new Date(now).toLocaleTimeString().slice(0, 5)}</span>
       </div>
     </div>

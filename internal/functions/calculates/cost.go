@@ -1,6 +1,8 @@
 package calculates
 
 import (
+	"time"
+
 	"github.com/MindsetAdmin/mindset-data-edge/internal/functions"
 )
 
@@ -10,13 +12,26 @@ type CostConfig struct {
 	Currency   string  `json:"currency"`    // Devise (EUR)
 }
 
-// CostResult résultat du calcul
+// CostResult résultat du calcul.
+//
+// WorkCenter/UNSTopic/Cause/Timestamp are passed through from the trigger
+// event (they arrive already-merged into the handler's params — see
+// internal/pipeline/engine.go's executeNode) rather than computed here.
+// They exist so this node's output, when it's a pipeline's terminal/output
+// node, matches the shape internal/kg/subscriber.go's onMicroStop expects on
+// mindset/events/micro-stop (work_center + timestamp are required for the KG
+// to accept the event; cost_eur is what makes it show up in kg_cost_summary).
 type CostResult struct {
-	DurationSeconds float64 `json:"duration_seconds"`
-	DurationMinutes float64 `json:"duration_minutes"`
-	CostPerMinute   float64 `json:"cost_per_minute"`
-	TotalCost       float64 `json:"total_cost_eur"`
-	Currency        string  `json:"currency"`
+	DurationSeconds float64   `json:"duration_seconds"`
+	DurationMinutes float64   `json:"duration_minutes"`
+	CostPerMinute   float64   `json:"cost_per_minute"`
+	TotalCost       float64   `json:"total_cost_eur"`
+	CostEur         float64   `json:"cost_eur"`
+	Currency        string    `json:"currency"`
+	WorkCenter      string    `json:"work_center,omitempty"`
+	UNSTopic        string    `json:"uns_topic,omitempty"`
+	Cause           string    `json:"cause,omitempty"`
+	Timestamp       time.Time `json:"timestamp"`
 }
 
 // CostHandler handler
@@ -44,12 +59,33 @@ func (h *CostHandler) GetFunction() *functions.Function {
 	}
 }
 
+// asFloat64 handles both float64 and int — a pipeline YAML's node.Config is
+// decoded by yaml.v3 into map[string]interface{}, and yaml.v3 unmarshals a
+// plain integer literal (e.g. "hourly_rate: 400", no decimal point) as Go
+// `int`, not `float64`. A bare `.(float64)` type assertion silently fails on
+// that and falls through to the default rate with no error anywhere — found
+// live when a seeded hourly_rate: 400 produced ~85€/h totals instead
+// (Entry 135).
+func asFloat64(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case float32:
+		return float64(n), true
+	}
+	return 0, false
+}
+
 // Execute calcule le coût
 func (h *CostHandler) Execute(durationSeconds float64, config map[string]interface{}) (*CostResult, error) {
 	hourlyRate := h.hourlyRate
 
 	// Surcharge par config si présente
-	if rate, ok := config["hourly_rate"].(float64); ok {
+	if rate, ok := asFloat64(config["hourly_rate"]); ok {
 		hourlyRate = rate
 	}
 
@@ -58,7 +94,7 @@ func (h *CostHandler) Execute(durationSeconds float64, config map[string]interfa
 	if product, ok := config["product"].(string); ok && product != "" {
 		if rates, ok := config["rates"].(map[string]interface{}); ok {
 			if row, ok := rates[product].(map[string]interface{}); ok {
-				if hr, ok := row["hourly_rate"].(float64); ok && hr > 0 {
+				if hr, ok := asFloat64(row["hourly_rate"]); ok && hr > 0 {
 					hourlyRate = hr
 				}
 			}
@@ -74,12 +110,31 @@ func (h *CostHandler) Execute(durationSeconds float64, config map[string]interfa
 	costPerMinute := hourlyRate / 60
 	totalCost := durationMinutes * costPerMinute
 
+	workCenter, _ := config["work_center"].(string)
+	unsTopic, _ := config["uns_topic"].(string)
+	cause, _ := config["cause"].(string)
+
+	// The KG subscriber requires a non-zero timestamp. status-change events
+	// (internal/rules/engine.go) carry start_time as RFC3339; fall back to
+	// now() when it's absent or unparseable (e.g. a manual/seeded run).
+	ts := time.Now()
+	if startTimeStr, ok := config["start_time"].(string); ok {
+		if parsed, err := time.Parse(time.RFC3339, startTimeStr); err == nil {
+			ts = parsed
+		}
+	}
+
 	return &CostResult{
 		DurationSeconds: durationSeconds,
 		DurationMinutes: durationMinutes,
 		CostPerMinute:   costPerMinute,
 		TotalCost:       totalCost,
+		CostEur:         totalCost,
 		Currency:        currency,
+		WorkCenter:      workCenter,
+		UNSTopic:        unsTopic,
+		Cause:           cause,
+		Timestamp:       ts,
 	}, nil
 }
 

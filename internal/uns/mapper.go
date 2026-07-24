@@ -14,6 +14,10 @@ type UNSNode struct {
 	Area       string // e.g. "area1", "packaging-line"
 	WorkCenter string // e.g. "machine1", "reactor-3"
 	WorkUnit   string // e.g. "ligne1" — optional, only if depth >= 3
+	// Depth is the raw tag name's dot-segment count — needed because
+	// WorkCenter/WorkUnit mean different things at different depths (see
+	// MapTag's doc comment and EquipmentIdentity below).
+	Depth int
 
 	// Tag metadata
 	TagName     string // normalized: "temperature", "pressure", "status"
@@ -21,6 +25,27 @@ type UNSNode struct {
 	DataType    string // "Float", "Boolean", "Int32"...
 	Unit        string // inferred: "celsius", "bar", "rpm", ""
 	Description string // human-readable description
+}
+
+// EquipmentIdentity returns the name that should be used as the physical
+// machine's identity everywhere it needs to be consistent — MQTT state
+// tracking, KG Equipment nodes, ERP work_center matching: WorkCenter for
+// 2-3 level tag names (WorkCenter already IS the machine there), WorkUnit
+// for 4+ level names (WorkCenter is a grouping level like a line, ABOVE the
+// machine — see MapTag's doc comment).
+//
+// This exact branch was previously duplicated ad hoc in
+// internal/kg/bootstrap.go (correctly) and cmd/server/opcua.go's
+// computeMappings (correctly) but never applied in the live MQTT-publish
+// path (OPCUAManager.route), which just used the raw WorkCenter field —
+// so two machines under the same 4-level line silently shared one
+// StateTracker entry and one live.go-derived "work_center" until Entry 127
+// fixed it here, centralizing the rule instead of re-deriving it per caller.
+func (n UNSNode) EquipmentIdentity() string {
+	if n.Depth >= 4 && n.WorkUnit != "" {
+		return n.WorkUnit
+	}
+	return n.WorkCenter
 }
 
 // Topic returns the full MQTT topic string for this UNS node.
@@ -71,7 +96,16 @@ func NewMapper(siteID string) *Mapper {
 //   "temp"                    → root-level tag (no machine context)
 //   "machine1.temp"           → 2 levels: workcenter + tag
 //   "machine2.ligne1.presion" → 3 levels: workcenter + workunit + tag
+//     (WorkCenter here IS the machine; WorkUnit is a sub-component of it)
 //   "a.b.c.d"                 → 4+ levels: area + workcenter + workunit + tag
+//     (verified against a real Prosys server, docs/analysis_log.md Entry 97/98:
+//     a real 4-level convention was "Usine_Paris_Nord.Ligne2.Machine3.status" —
+//     Site.Line.Machine.Tag. There, WorkCenter is a *grouping* level (a line)
+//     ABOVE the machine, and WorkUnit is the machine itself — the reverse of
+//     the 3-level case's roles. Callers that treat WorkCenter as "the machine"
+//     (e.g. entity resolution against business work_center values) must branch
+//     on depth, not assume WorkCenter always means the same thing — see
+//     internal/kg.SeedFromDiscovery for the concrete case.
 func (m *Mapper) MapTag(tagName, dataType string) UNSNode {
 	parts := strings.Split(tagName, ".")
 
@@ -79,6 +113,7 @@ func (m *Mapper) MapTag(tagName, dataType string) UNSNode {
 		Site:        m.SiteID,
 		OriginalName: tagName,
 		DataType:    dataType,
+		Depth:       len(parts),
 	}
 
 	switch len(parts) {

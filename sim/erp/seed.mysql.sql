@@ -65,10 +65,14 @@ INSERT INTO work_orders (of_number, product_code, work_center, planned_qty, actu
 ('WO-2026-8030', 'PROD-A01', 'machine1', 5000, 4991, 'DONE',    NOW() -  INTERVAL 1 DAY, NOW() -  INTERVAL 1 DAY + INTERVAL 4 HOUR, 'OP-001');
 
 -- ----- Work Orders — currently RUNNING (one per work_center) ----------------
-INSERT INTO work_orders (of_number, product_code, work_center, planned_qty, actual_qty, status, started_at, finished_at, operator_id) VALUES
-('WO-2026-9001', 'PROD-A02', 'machine1', 5000, 2100, 'RUNNING', NOW() - INTERVAL 3 HOUR,     NULL, 'OP-002'),
-('WO-2026-9002', 'PROD-B01', 'machine2', 3000,  800, 'RUNNING', NOW() - INTERVAL 1 HOUR,     NULL, 'OP-004'),
-('WO-2026-9003', 'PROD-C01', 'machine3', 2000,  450, 'RUNNING', NOW() - INTERVAL 30 MINUTE,  NULL, 'OP-006');
+-- due_date/customer_id deliberately span a range of urgency (Entry 133) so
+-- "what's due soon" and "what's costing the most" can disagree in the demo —
+-- machine1's order is due tomorrow for a named customer, machine2's isn't
+-- due for over a week.
+INSERT INTO work_orders (of_number, product_code, work_center, planned_qty, actual_qty, status, started_at, finished_at, operator_id, due_date, customer_id) VALUES
+('WO-2026-9001', 'PROD-A02', 'machine1', 5000, 2100, 'RUNNING', NOW() - INTERVAL 3 HOUR,     NULL, 'OP-002', CURDATE() + INTERVAL 1 DAY,  'GrandeDistribution-X'),
+('WO-2026-9002', 'PROD-B01', 'machine2', 3000,  800, 'RUNNING', NOW() - INTERVAL 1 HOUR,     NULL, 'OP-004', CURDATE() + INTERVAL 10 DAY, 'PharmaCorp-EU'),
+('WO-2026-9003', 'PROD-C01', 'machine3', 2000,  450, 'RUNNING', NOW() - INTERVAL 30 MINUTE,  NULL, 'OP-006', CURDATE() + INTERVAL 3 DAY,  'BeauteDirect');
 
 -- ----- Work Orders — PLANNED (near-future) ----------------------------------
 INSERT INTO work_orders (of_number, product_code, work_center, planned_qty, actual_qty, status, started_at, finished_at, operator_id) VALUES

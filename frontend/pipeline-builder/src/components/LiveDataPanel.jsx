@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { fetchTags } from '../api/client';
 import { useLiveSocket } from '../lib/useLiveSocket';
@@ -17,6 +18,7 @@ function toNum(v) {
 // Live, user-selected tag chart: pick tag(s) and watch their values stream in
 // over the WebSocket. Self-contained (own /api/ws subscription).
 export default function LiveDataPanel() {
+  const { t } = useTranslation();
   const [selected, setSelected] = useState([]); // [{node_id, name}]
   const [available, setAvailable] = useState([]);
   const [rows, setRows] = useState([]); // [{time, <node_id>: number, ...}]
@@ -31,13 +33,13 @@ export default function LiveDataPanel() {
 
   const connected = useLiveSocket((msg) => {
     if (msg.type !== 'tag') return;
-    const t = msg.data;
-    if (!t || !selRef.current.some((s) => s.node_id === t.node_id)) return;
-    setLatest((prev) => ({ ...prev, [t.node_id]: t.value }));
-    const num = toNum(t.value);
+    const tagMsg = msg.data;
+    if (!tagMsg || !selRef.current.some((s) => s.node_id === tagMsg.node_id)) return;
+    setLatest((prev) => ({ ...prev, [tagMsg.node_id]: tagMsg.value }));
+    const num = toNum(tagMsg.value);
     if (num === null) return;
     setRows((prev) => {
-      const row = { time: new Date().toLocaleTimeString().slice(0, 8), [t.node_id]: num };
+      const row = { time: new Date().toLocaleTimeString().slice(0, 8), [tagMsg.node_id]: num };
       const next = [...prev, row];
       return next.length > MAX_POINTS ? next.slice(next.length - MAX_POINTS) : next;
     });
@@ -50,22 +52,22 @@ export default function LiveDataPanel() {
   const removeTag = (id) => setSelected((prev) => prev.filter((s) => s.node_id !== id));
 
   const pickerOptions = available
-    .filter((t) => !selected.some((s) => s.node_id === t.node_id))
-    .map((t) => ({
-      value: t.node_id,
-      label: t.name || t.node_id,
-      sub: `valeur: ${t.value} · ${t.data_type}`,
-      badge: t.node_id,
-      group: (t.name || '').split('.')[0] || 'autres',
+    .filter((tg) => !selected.some((s) => s.node_id === tg.node_id))
+    .map((tg) => ({
+      value: tg.node_id,
+      label: tg.name || tg.node_id,
+      sub: `${t('builder.value')}: ${tg.value} · ${tg.data_type}`,
+      badge: tg.node_id,
+      group: (tg.name || '').split('.')[0] || t('liveData.others'),
     }));
 
   return (
     <div className="bg-dark-900 border border-dark-700 rounded-lg p-4">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-medium text-dark-300">📡 Données en direct</h3>
+        <h3 className="text-sm font-medium text-dark-300">📡 {t('liveData.title')}</h3>
         <div className="flex items-center gap-3">
           <span className={`text-[11px] ${connected ? 'text-green-400' : 'text-dark-500'}`}>
-            {connected ? '● live' : '○ hors-ligne'}
+            {connected ? '● live' : `○ ${t('dashboard.offline')}`}
           </span>
           <button onClick={() => setShowPicker(true)} className="text-xs bg-dark-700 hover:bg-dark-600 text-white px-2.5 py-1 rounded-md transition">
             + tag
@@ -75,7 +77,7 @@ export default function LiveDataPanel() {
 
       {selected.length === 0 ? (
         <p className="text-sm text-dark-500 py-8 text-center">
-          Choisissez un ou plusieurs tags à visualiser en direct (bouton « + tag »).
+          {t('liveData.chooseTags')}
         </p>
       ) : (
         <>
@@ -110,14 +112,14 @@ export default function LiveDataPanel() {
             </LineChart>
           </ResponsiveContainer>
           {rows.length === 0 && (
-            <p className="text-[11px] text-dark-500 text-center mt-2">En attente de nouvelles valeurs… (l'agent doit publier)</p>
+            <p className="text-[11px] text-dark-500 text-center mt-2">{t('liveData.waitingForValues')}</p>
           )}
         </>
       )}
 
       {showPicker && (
         <PickerModal
-          title="Choisir un tag à afficher"
+          title={t('liveData.pickerTitle')}
           options={pickerOptions}
           allowCustom={false}
           onSelect={addTag}

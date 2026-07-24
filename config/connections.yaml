@@ -1,0 +1,20 @@
+# config/connections.yaml
+#
+# SQL connections available to the sql_query pipeline function. V1a supports
+# only driver: mysql. Passwords are never inlined — password_env names an
+# environment variable resolved at connection-open time.
+connections:
+  - id: dev_erp
+    name: "Dev ERP (MySQL simulator)"
+    driver: mysql
+    host: localhost
+    port: 3308
+    database: fake_erp
+    username: mindset_readonly
+    password_env: MINDSET_ERP_PASSWORD
+    tls: "false" # local dev only
+    read_timeout_seconds: 30
+    write_timeout_seconds: 10
+    max_open_conns: 5
+    max_idle_conns: 2
+    conn_max_lifetime_seconds: 300

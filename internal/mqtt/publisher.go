@@ -78,12 +78,25 @@ func (p *Publisher) PublishRaw(tagName, nodeID, dataType string, value interface
 // Utilisé par le routage dynamique côté serveur pour publier les messages ISA-95
 // contextualisés sur mindset/site/#.
 func (p *Publisher) PublishJSON(topic string, payload interface{}) {
+    p.publishJSON(topic, payload, false)
+}
+
+// PublishJSONRetained is PublishJSON with the MQTT retained flag set, so any
+// client that subscribes after this call (a restarted MCP stdio process, a
+// freshly opened dashboard tab) immediately receives the last known value
+// instead of waiting for the next change — a non-retained publish only
+// reaches subscribers that were already listening at the moment it fired.
+func (p *Publisher) PublishJSONRetained(topic string, payload interface{}) {
+    p.publishJSON(topic, payload, true)
+}
+
+func (p *Publisher) publishJSON(topic string, payload interface{}, retained bool) {
     data, err := json.Marshal(payload)
     if err != nil {
         log.Printf("[MQTT] Failed to marshal payload for %s: %v", topic, err)
         return
     }
-    token := p.client.Publish(topic, 0, false, data)
+    token := p.client.Publish(topic, 0, retained, data)
     token.Wait()
     if token.Error() != nil {
         log.Printf("[MQTT] Failed to publish to %s: %v", topic, token.Error())

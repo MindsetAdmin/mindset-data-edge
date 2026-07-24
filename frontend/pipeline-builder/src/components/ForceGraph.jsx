@@ -16,7 +16,21 @@ import ForceGraph2D from 'react-force-graph-2d';
 // cool tones. Falls back to a muted grey.
 const NODE_COLORS = {
     // ─── Business (site fingerprint) ─────────────────────────
-    Equipment: '#F87171',   // status-stopped soft red
+    // Site/Area/WorkCenter/Equipment/Tag form the structural-bootstrap hierarchy
+    // (Entries 95-98/107) — colored as a deliberate gradient, broadest to most
+    // granular, so the nesting reads visually. Tag is the most numerous type by
+    // far (one per signal), so it's kept quiet/muted rather than eye-catching.
+    Site:       '#93C5FD',  // light blue — broadest scope
+    Area:       '#5EEAD4',  // teal — a zone within the site
+    WorkCenter: '#FDBA74',  // light orange — a grouping level above Equipment (e.g. a line)
+    Equipment:  '#F87171',  // status-stopped soft red — the physical machine
+    Tag:        '#CBD5E1',  // muted slate — the leaf level, deliberately quiet (added Entry 111 — was previously missing, fell through to the grey fallback along with Site/Area)
+    // SchemaMapping — the IT-side structural bootstrap (Entry 115, Track B):
+    // an auto-suggested canonical mapping of a SQL table, pending validation
+    // same as OT nodes above. Distinct hue (violet-blue) since it's neither
+    // OT hierarchy nor a business event — added deliberately up front, not
+    // left to fall through to FALLBACK_COLOR (the exact bug Entry 111 fixed).
+    SchemaMapping: '#0EA5E9',
     Event:     '#E5A445',   // brand accent (amber)
     Cause:     '#A78BFA',   // purple
     Cost:      '#4ADE80',   // status-running green
@@ -33,6 +47,11 @@ const NODE_COLORS = {
     dashboard:  '#F0ABFC',  // pink-light
 };
 const FALLBACK_COLOR = '#6E6E7A';
+// v0 structural bootstrap (Entry 95/96) — auto-generated nodes awaiting human
+// validation render dimmer with a dashed amber ring, so they're visible in the
+// graph but clearly not-yet-confirmed.
+const PENDING_RING_COLOR = '#E5A445';
+const PENDING_ALPHA = 0.55;
 
 // Design tokens (mirrored here because canvas rendering needs concrete strings)
 const CANVAS_BG      = '#0A0A0B';
@@ -179,13 +198,26 @@ export default function ForceGraph({ graph, onNodeSelect }) {
             const size = isHovered ? baseSize * 1.35 : baseSize;
 
             const color = NODE_COLORS[node.type] || FALLBACK_COLOR;
-            ctx.globalAlpha = isFaded ? 0.15 : 1;
+            const isPending = Boolean(node.properties?.pending);
+            ctx.globalAlpha = isFaded ? 0.15 : isPending ? PENDING_ALPHA : 1;
 
             // Filled circle
             ctx.beginPath();
             ctx.arc(node.x, node.y, size, 0, 2 * Math.PI, false);
             ctx.fillStyle = color;
             ctx.fill();
+
+            // Pending ring — dashed amber, so an unvalidated auto-generated
+            // node is visibly different even before hovering it.
+            if (isPending && !isFaded) {
+                ctx.beginPath();
+                ctx.setLineDash([2 / globalScale, 2 / globalScale]);
+                ctx.arc(node.x, node.y, size + 2, 0, 2 * Math.PI, false);
+                ctx.strokeStyle = PENDING_RING_COLOR;
+                ctx.lineWidth = 1 / globalScale;
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
 
             // Hover ring
             if (isHovered) {

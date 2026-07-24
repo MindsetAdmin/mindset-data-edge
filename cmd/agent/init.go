@@ -97,7 +97,7 @@ func initKnowledgeGraph() *kg.KnowledgeGraph {
 	log.Printf("[KG] ✅ Knowledge Graph ready")
 
 	// Démarrer le subscriber KG
-	kgSub, err := kg.NewKGSubscriber("tcp://localhost:1883", kgInstance)
+	kgSub, err := kg.NewKGSubscriber("tcp://localhost:1883", "mindset-agent-kg", kgInstance)
 	if err != nil {
 		log.Printf("[KG] ⚠️ Warning: failed to create subscriber: %v", err)
 	} else {
@@ -120,9 +120,6 @@ func initFunctionsRegistry(cfg *config.Config, mqttPub *mqtt.Publisher, kgInstan
 	// Transforms
 	stateMachineHandler := transforms.NewStateMachineHandler()
 	funcRegistry.Register(stateMachineHandler.GetFunction())
-
-	unsMapperHandler := transforms.NewUNSMapperHandler(cfg.Site.ID)
-	funcRegistry.Register(unsMapperHandler.GetFunction())
 
 	filterHandler := transforms.NewFilterHandler()
 	funcRegistry.Register(filterHandler.GetFunction())

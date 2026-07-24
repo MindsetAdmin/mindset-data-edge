@@ -263,7 +263,7 @@ If we let this heterogeneity leak into the rules engine, the Knowledge Graph, th
 
 ### The design — canonical model + `field_map`
 
-We define a small, opinionated **canonical model** — the shape every downstream MindSet feature can assume:
+We define a small, opinionated **canonical model** — the shape every downstream MindSet feature can assume. Object set decided in `docs/analysis_log.md` Entry 92: aligned to ISA-95 Part 2's information model **conceptually** (the object types below), not to its B2MML wire format:
 
 ```
 WorkOrder { of_number, product_code, work_center, planned_qty, actual_qty, status,
@@ -272,10 +272,17 @@ Batch     { batch_id, of_number, started_at, finished_at, quality_status }
 Product   { product_code, name, target_rate, recipe_id, hourly_margin }
 Schedule  { work_center, of_number, planned_start, planned_end }
 Quality   { batch_id, measured_at, metric, value, spec_min, spec_max }
-Operator  { operator_id, name, shift }
+Operator  { operator_id, name, shift }                                    # ISA-95's Personnel model
+Material  { material_code, name, type, lot_id, quantity_available }       # ISA-95's Material model — distinct from Product: what's consumed (raw material, spare part), not what's made
+Asset     { asset_id, work_center, asset_type, install_date,
+            last_maintenance_at, maintenance_status }                     # ISA-95's Equipment model, IT side (ERP/CMMS asset record)
+ProcessSegment { segment_id, name, product_code, work_center,
+                 standard_duration, sequence }                            # ISA-95's Process Segment — a routing/operation step
 ```
 
-These match the fake ERP schema in §10.2 exactly — which is by design: the sim IS the canonical shape.
+These match the fake ERP schema in §10.2 exactly for the first six — which is by design: the sim IS the canonical shape. `Material`, `Asset`, and `ProcessSegment` are new (Entry 92) and not yet in the fake ERP seed data.
+
+**`Asset` has a special role, worth calling out:** it's deliberately the IT-side mirror of the KG's existing OT-derived `Equipment` node type (`internal/kg/types.go`, created today only via `internal/kg/subscriber.go` from micro-stop events — see Entry 87). The point of a separate `Asset` canonical type isn't to create a second, disconnected node type — it's the input to the entity-resolution step flagged in Entry 89 (linking an ERP asset record to the matching OT `Equipment` node by work-center/asset-id fuzzy match) once that bridge is built. Until then, `Asset` rows just flow through as normal `sql_query` output like any other canonical type.
 
 The `sql_query` config gets a new optional field, `field_map`, that translates the customer's actual column names into canonical names:
 
@@ -330,9 +337,10 @@ The handler's output includes BOTH the raw row AND the canonical row for each re
 }
 ```
 
-- Downstream nodes (rules, KG subscriber, Impact Engine, MCP) consume `canonical` — they don't care about the customer's column names.
+- **Design intent, not current behavior:** downstream nodes (rules, KG subscriber, Impact Engine, MCP) are *meant to* consume `canonical` so they don't care about the customer's column names — but as of `docs/analysis_log.md` Entry 90, nothing actually does yet. `internal/kg/subscriber.go` subscribes to exactly one MQTT topic (`mindset/events/micro-stop`); it never reads a `canonical` payload. A pipeline can produce `canonical` output today, but nothing downstream consumes it automatically — see Entry 87/89/90 for the broader gap (the same missing bridge also affects OPC-UA→KG structure discovery) and the proposed fix.
 - Raw `rows` stay available as an escape hatch — pipeline authors can access `wo_no` directly if they need something the canonical model doesn't expose.
 - Missing `field_map` → `canonical` is empty and `canonical_type` is `null`. Handler doesn't error — degrades gracefully.
+- **Naming precision (decided, Entry 92):** this canonical model's *object types* are deliberately aligned to ISA-95 Part 2's information model (Work Order, Product/Material, Personnel, Equipment, Process Segment). What's **not** adopted is ISA-95's wire format — B2MML/XML. External-facing language: **"our canonical model aligns with ISA-95's information model."** Never **"ISA-95-compliant"** — that implies B2MML conformance, which is explicitly out of scope.
 
 ### Status normalization
 

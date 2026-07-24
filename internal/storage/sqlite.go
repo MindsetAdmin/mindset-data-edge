@@ -26,6 +26,17 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 		return nil, err
 	}
 
+	// cmd/server and cmd/agent each open their own *sql.DB against this same
+	// file (server: TagRegistry + its own KG; agent: Rules Engine's KG
+	// subscriber) — concurrent writers from separate OS processes hit
+	// SQLITE_BUSY immediately without this, since SQLite's default is to fail
+	// fast rather than wait for a lock to clear (Entry 130/131: this surfaced
+	// once the KG subscribers' client-ID collision was fixed and both
+	// processes' subscribers started actually writing at the same time).
+	if _, err := db.Exec("PRAGMA busy_timeout = 5000;"); err != nil {
+		log.Printf("[STORAGE] Failed to set busy_timeout: %v", err)
+	}
+
 	// Créer les tables
 	if err := initTables(db); err != nil {
 		return nil, err
@@ -73,6 +84,28 @@ func initTables(db *sql.DB) error {
 			payload TEXT,
 			timestamp DATETIME NOT NULL,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		// connections — SQL connection definitions created via /api/connections
+		// (internal/connections.Registry is the runtime pool; this table is the
+		// persisted source of truth so they survive a restart). Never stores a
+		// password — only the env var name that holds it.
+		`CREATE TABLE IF NOT EXISTS connections (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			driver TEXT NOT NULL,
+			host TEXT NOT NULL,
+			port INTEGER NOT NULL,
+			database TEXT NOT NULL,
+			username TEXT NOT NULL,
+			password_env TEXT NOT NULL,
+			tls TEXT NOT NULL,
+			read_timeout_seconds INTEGER NOT NULL DEFAULT 30,
+			write_timeout_seconds INTEGER NOT NULL DEFAULT 10,
+			max_open_conns INTEGER NOT NULL DEFAULT 5,
+			max_idle_conns INTEGER NOT NULL DEFAULT 2,
+			conn_max_lifetime_seconds INTEGER NOT NULL DEFAULT 300,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 	}
 	for _, q := range tableQueries {

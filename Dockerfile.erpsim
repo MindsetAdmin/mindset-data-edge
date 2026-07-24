@@ -1,0 +1,17 @@
+# Dockerfile.erpsim
+FROM golang:1.26-alpine
+
+WORKDIR /app
+
+# Copy only what's needed for erpsim
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd/erpsim ./cmd/erpsim/
+COPY sim/erp ./sim/erp/
+
+# Build the erpsim binary
+RUN go build -o /erpsim ./cmd/erpsim
+
+# Run it
+CMD ["/erpsim"]

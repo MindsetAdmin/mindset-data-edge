@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import {
     LayoutDashboard,
     Plug,
@@ -9,15 +10,41 @@ import {
 } from 'lucide-react';
 
 const TABS = [
-    { to: '/overview', label: 'Overview', Icon: LayoutDashboard },
-    { to: '/connect', label: 'Connect', Icon: Plug },
-    { to: '/compose', label: 'Compose', Icon: Workflow },
-    { to: '/pipelines', label: 'Pipelines', Icon: List },
-    { to: '/dashboards', label: 'Dashboards', Icon: BarChart3 },
-    { to: '/kg', label: 'Knowledge Graph', Icon: Network },
+    { to: '/overview', key: 'nav.overview', Icon: LayoutDashboard },
+    { to: '/connectors', key: 'nav.connectors', Icon: Plug },
+    { to: '/compose', key: 'nav.compose', Icon: Workflow },
+    { to: '/pipelines', key: 'nav.pipelines', Icon: List },
+    { to: '/dashboards', key: 'nav.dashboards', Icon: BarChart3 },
+    { to: '/kg', key: 'nav.kg', Icon: Network },
 ];
 
+function LanguageToggle() {
+    const { i18n } = useTranslation();
+    const setLang = (lng) => {
+        i18n.changeLanguage(lng);
+        localStorage.setItem('mindset_lang', lng);
+    };
+    return (
+        <div className="ml-auto flex items-center gap-0.5 shrink-0">
+            {['fr', 'en'].map((lng) => (
+                <button
+                    key={lng}
+                    onClick={() => setLang(lng)}
+                    className={`px-2 py-1 rounded text-[11px] font-mono uppercase tracking-wider transition-colors ${
+                        i18n.resolvedLanguage === lng
+                            ? 'bg-elevated text-text-primary'
+                            : 'text-text-tertiary hover:text-text-primary hover:bg-panel-alt'
+                    }`}
+                >
+                    {lng}
+                </button>
+            ))}
+        </div>
+    );
+}
+
 export default function NavBar() {
+    const { t } = useTranslation();
     return (
         <header className="bg-panel border-b border-border-subtle px-4 py-2 flex items-center gap-6 shrink-0">
             <img
@@ -26,7 +53,7 @@ export default function NavBar() {
                 className="h-7 w-auto shrink-0"
             />
             <nav className="flex gap-0.5">
-                {TABS.map(({ to, label, Icon }) => (
+                {TABS.map(({ to, key, Icon }) => (
                     <NavLink
                         key={to}
                         to={to}
@@ -39,10 +66,11 @@ export default function NavBar() {
                         }
                     >
                         <Icon size={14} strokeWidth={1.5} />
-                        <span>{label}</span>
+                        <span>{t(key)}</span>
                     </NavLink>
                 ))}
             </nav>
+            <LanguageToggle />
         </header>
     );
 }

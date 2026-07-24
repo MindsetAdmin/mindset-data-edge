@@ -23,6 +23,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/MindsetAdmin/mindset-data-edge/internal/config"
+	"github.com/MindsetAdmin/mindset-data-edge/internal/connections"
 	"github.com/MindsetAdmin/mindset-data-edge/internal/functions"
 	"github.com/MindsetAdmin/mindset-data-edge/internal/functions/calculates"
 	"github.com/MindsetAdmin/mindset-data-edge/internal/functions/conditions"
@@ -46,6 +47,7 @@ type server struct {
 	opcua        *OPCUAManager
 	cfg          *config.Config
 	mqttClient   mqtt.Client
+	connReg      *connections.Registry
 	startTime    time.Time
 }
 
@@ -54,6 +56,8 @@ func main() {
 	dbPath := flag.String("db", "./data/mindset.db", "path to the mindset SQLite database")
 	pipelinesDir := flag.String("pipelines", "config/pipelines", "directory holding pipeline YAML files")
 	addr := flag.String("addr", ":8080", "HTTP listen address (matches the Vite dev proxy)")
+	mcpStdio := flag.Bool("mcp-stdio", false, "run only the MCP server over stdio (for local MCP clients like Claude Desktop's mcpServers config) instead of the HTTP API — no port is bound in this mode")
+	connectionsPath := flag.String("connections", "config/connections.yaml", "path to the SQL connections config")
 	flag.Parse()
 
 	// Config is optional — fall back to defaults if absent.
@@ -78,7 +82,15 @@ func main() {
 	defer kgInstance.Close()
 
 	// Best-effort MQTT connection so "Run" can actually execute MQTT handlers.
-	mqttClient := connectMQTT(broker)
+	// A distinct client ID in -mcp-stdio mode: the paho MQTT spec disconnects
+	// whichever connection loses when two clients share a client ID, which
+	// would otherwise silently kick the already-running HTTP instance the
+	// moment a Claude Desktop-spawned stdio process connects.
+	mqttClientID := "mindset-api-server"
+	if *mcpStdio {
+		mqttClientID = "mindset-mcp-stdio"
+	}
+	mqttClient := connectMQTT(broker, mqttClientID)
 	if mqttClient != nil {
 		log.Printf("[API] MQTT connected (%s)", broker)
 		defer mqttClient.Disconnect(250)
@@ -88,7 +100,7 @@ func main() {
 
 	// Automatic Knowledge Graph enrichment from events.
 	if mqttClient != nil {
-		if kgSub, err := kg.NewKGSubscriber(broker, kgInstance); err != nil {
+		if kgSub, err := kg.NewKGSubscriber(broker, mqttClientID+"-kg", kgInstance); err != nil {
 			log.Printf("[API] KG auto-enrichment unavailable: %v", err)
 		} else if err := kgSub.Start(); err != nil {
 			log.Printf("[API] KG subscriber failed to start: %v", err)
@@ -117,10 +129,31 @@ func main() {
 	// Dynamic, frontend-driven OPC-UA control plane. Idle until the UI calls
 	// /api/opcua/connect; publishes selected tags to the same broker the LiveHub
 	// already watches, so discovered tags surface via /api/tags + WebSocket.
-	opcuaMgr := NewOPCUAManager(broker, cfg)
+	opcuaMgr := NewOPCUAManager(broker, cfg, kgInstance)
+
+	// SQL connection registry (Day 6 of docs/mysql_connector.md). YAML-seeded
+	// connections load first, then persisted ones from data/mindset.db
+	// (created via POST /api/connections) — the latter win on id conflicts
+	// since they reflect the most recent user edit.
+	connCfg, connCfgErr := connections.LoadConfig(*connectionsPath)
+	if connCfgErr != nil {
+		log.Printf("[API] No %s (%v); starting with an empty connection set", *connectionsPath, connCfgErr)
+		connCfg = &connections.Config{}
+	}
+	connReg := connections.NewRegistry(connCfg)
+	defer connReg.CloseAll()
+	if records, err := kgInstance.Store().ListConnections(); err != nil {
+		log.Printf("[API] Could not load persisted connections: %v", err)
+	} else {
+		for _, rec := range records {
+			if err := connReg.Add(rec.ConnectionConfig); err != nil {
+				log.Printf("[API] Skipping invalid persisted connection %q: %v", rec.ID, err)
+			}
+		}
+	}
 
 	srv := &server{
-		funcRegistry: buildRegistry(hourlyRate, mqttClient),
+		funcRegistry: buildRegistry(hourlyRate, mqttClient, connReg),
 		kg:           kgInstance,
 		pipelinesDir: *pipelinesDir,
 		hourlyRate:   hourlyRate,
@@ -131,7 +164,21 @@ func main() {
 		opcua:        opcuaMgr,
 		cfg:          cfg,
 		mqttClient:   mqttClient,
+		connReg:      connReg,
 		startTime:    time.Now(),
+	}
+
+	// -mcp-stdio: no HTTP server at all — Claude Desktop (or any local MCP
+	// client that launches a subprocess rather than connecting to a URL)
+	// owns this process's lifecycle via stdin/stdout. Everything above (KG,
+	// MQTT/LiveHub, connections registry) stays wired up exactly as in HTTP
+	// mode, so the same tools return real, live data either way.
+	if *mcpStdio {
+		log.Printf("[API] Running MCP server over stdio (no HTTP listener, no port bound)")
+		if err := runMCPStdio(srv); err != nil {
+			log.Fatalf("[API] MCP stdio server exited with error: %v", err)
+		}
+		return
 	}
 
 	mux := http.NewServeMux()
@@ -140,6 +187,7 @@ func main() {
 	mux.HandleFunc("/api/pipelines", srv.handlePipelines)           // GET list, POST save
 	mux.HandleFunc("/api/pipelines/examples", srv.handleExamplePipelines) // GET templates
 	mux.HandleFunc("/api/pipelines/{id}/run", srv.handleRunPipeline) // POST execute
+	mux.HandleFunc("/api/pipelines/{id}", srv.handleDeletePipeline)  // DELETE
 	mux.HandleFunc("/api/tags", srv.handleTags)
 	mux.HandleFunc("/api/machines", srv.handleMachines)
 	mux.HandleFunc("/api/topics", srv.handleTopics)
@@ -151,14 +199,25 @@ func main() {
 	mux.HandleFunc("/api/opcua/status", srv.handleOpcuaStatus)         // GET: connection status
 	mux.HandleFunc("/api/opcua/selections", srv.handleOpcuaSelections) // GET: per-tag routing (governance)
 	mux.HandleFunc("/api/dashboard/pins", srv.handleDashboardPins)
+	mux.HandleFunc("/api/connections", srv.handleConnections)                   // GET list, POST create
+	mux.HandleFunc("/api/connections/{id}/test", srv.handleConnectionTest)      // POST: re-run health check
+	mux.HandleFunc("/api/connections/{id}/preview", srv.handleConnectionPreview) // POST: preview a query, capped at 5 rows
+	mux.HandleFunc("/api/connections/{id}/discover", srv.handleConnectionDiscover)   // GET: schema browse + canonical-mapping auto-suggest (Track B Phase 1+2)
+	mux.HandleFunc("/api/connections/{id}/databases", srv.handleConnectionDatabases) // GET: browse every database + table visible to this connection
+	mux.HandleFunc("/api/production/active", srv.handleActiveProduction)          // GET: live active production per machine, OT-linked where resolved (Entry 120)
+	mux.HandleFunc("/api/connections/{id}", srv.handleConnectionDelete)         // DELETE
 	mux.HandleFunc("/api/kg", srv.handleKG)                        // unified — ?category=business|platform|all
 	mux.HandleFunc("/api/kg/technical", srv.handleTechnicalGraph)   // legacy alias → category=platform
 	mux.HandleFunc("/api/kg/domain", srv.handleDomainGraph)         // legacy alias → category=business
+	mux.HandleFunc("/api/kg/pending", srv.handleKGPending)                   // GET: nodes awaiting validation (v0 structural bootstrap, Entry 95/96)
+	mux.HandleFunc("/api/kg/pending/{id}/validate", srv.handleKGValidate)    // POST: confirm an auto-generated node
+	mux.HandleFunc("/api/kg/pending/{id}/reject", srv.handleKGReject)        // POST: discard an auto-generated node
 	mux.HandleFunc("/api/stats", srv.handleStats)
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("/api/ws", wsHubInstance.handle) // WebSocket: live push to the UI
+	mountMCP(mux, srv)                              // /mcp — read-only agent tools (Track A, see mcp_server.go)
 
 	log.Printf("[API] Config: %s | DB: %s | Pipelines: %s", *cfgPath, *dbPath, *pipelinesDir)
 	log.Printf("[API] Registered %d functions", len(srv.funcRegistry.List()))
@@ -168,19 +227,19 @@ func main() {
 
 // buildRegistry registers every function. MQTT handlers get a real client when
 // one is available (for real execution); OPC-UA stays nil and errors gracefully
-// if run without a live server. Modbus/SQL are demo stubs.
-func buildRegistry(hourlyRate float64, mqttClient mqtt.Client) *functions.Registry {
+// if run without a live server. Modbus is still a demo stub; sql_query runs for
+// real against connReg (empty registry = every query errors "unknown connection").
+func buildRegistry(hourlyRate float64, mqttClient mqtt.Client, connReg *connections.Registry) *functions.Registry {
 	reg := functions.NewRegistry()
 
 	// Connectors
 	reg.Register(connectors.NewOPCUAReadHandler(nil).GetFunction())
 	reg.Register(connectors.NewMQTTSubscribeHandler(mqttClient).GetFunction())
 	reg.Register(stubConnector("modbus_read", "Lire depuis un équipement Modbus (démo)"))
-	reg.Register(stubConnector("sql_query", "Interroger une base SQL (démo)"))
+	reg.Register(connectors.NewSQLQueryHandler(connReg).GetFunction())
 
 	// Transforms
 	reg.Register(transforms.NewStateMachineHandler().GetFunction())
-	reg.Register(transforms.NewUNSMapperHandler("local").GetFunction())
 	reg.Register(transforms.NewFilterHandler().GetFunction())
 
 	// Calculates
@@ -191,8 +250,10 @@ func buildRegistry(hourlyRate float64, mqttClient mqtt.Client) *functions.Regist
 	reg.Register(conditions.NewThresholdHandler().GetFunction())
 
 	// Outputs — kg_save is intentionally NOT registered: the Knowledge Graph
-	// enriches itself automatically via the KG subscriber.
-	reg.Register(outputs.NewMQTTPublishHandler(mqttClient).GetFunction())
+	// enriches itself automatically via the KG subscriber. mqtt_publish is
+	// intentionally NOT registered either (removed Entry 119): a pipeline's
+	// terminal node result now auto-publishes without an explicit node —
+	// see cmd/server/pipeline_output.go.
 	reg.Register(outputs.NewDashboardHandler(mqttClient).GetFunction())
 
 	return reg
@@ -211,10 +272,10 @@ func stubConnector(name, desc string) *functions.Function {
 }
 
 // connectMQTT returns a connected client, or nil if no broker is reachable.
-func connectMQTT(broker string) mqtt.Client {
+func connectMQTT(broker, clientID string) mqtt.Client {
 	opts := mqtt.NewClientOptions().
 		AddBroker(broker).
-		SetClientID("mindset-api-server").
+		SetClientID(clientID).
 		SetConnectTimeout(2 * time.Second)
 	c := mqtt.NewClient(opts)
 	tok := c.Connect()
@@ -331,14 +392,64 @@ func (s *server) savePipeline(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]interface{}{"status": "saved", "id": p.ID, "file": outPath})
 }
 
+// handleDeletePipeline removes a saved pipeline's YAML file. Uses the same
+// sanitizeFilename(id) mapping savePipeline uses to derive the file, so a
+// pipeline always deletes the exact file it would have been saved to.
+func (s *server) handleDeletePipeline(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id := r.PathValue("id")
+	if strings.TrimSpace(id) == "" {
+		http.Error(w, "pipeline id is required", http.StatusBadRequest)
+		return
+	}
+	filename := sanitizeFilename(id)
+	if filename == "" {
+		http.Error(w, "pipeline id produces an empty filename", http.StatusBadRequest)
+		return
+	}
+
+	path := filepath.Join(s.pipelinesDir, filename+".yaml")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		http.Error(w, fmt.Sprintf("pipeline %s not found", id), http.StatusNotFound)
+		return
+	}
+	if err := os.Remove(path); err != nil {
+		http.Error(w, "failed to delete pipeline: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[API] Deleted pipeline %q -> %s", id, path)
+	writeJSON(w, map[string]interface{}{"status": "deleted", "id": id})
+}
+
 // handleRunPipeline executes a pipeline by id and returns the ExecutionResult
 // (per-node status + timing). Real execution: handlers actually run.
+//
+// No pipeline is ever auto-triggered by live MQTT messages today — a
+// pipeline's trigger.function/config in its YAML is declarative only
+// (shown in the Compose UI's ENTRÉE zone), never actually subscribed by the
+// engine. This is the only path that runs a pipeline at all. An optional
+// JSON body ({"trigger_data": {...}}) lets a caller supply what a real
+// trigger message would have carried (e.g. work_center/duration_seconds),
+// which is how a manual test/demo run exercises the same params a live
+// mqtt_subscribe trigger would eventually provide — an empty/absent body
+// keeps the previous no-trigger-data behavior unchanged.
 func (s *server) handleRunPipeline(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	id := r.PathValue("id")
+
+	var body struct {
+		TriggerData map[string]interface{} `json:"trigger_data"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body) // best-effort — empty/absent body is valid
+	}
 
 	loader := pipeline.NewLoader(s.pipelinesDir)
 	pipelines, err := loader.LoadAll()
@@ -364,12 +475,17 @@ func (s *server) handleRunPipeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := eng.Execute(context.Background(), target.ID, map[string]interface{}{})
+	triggerData := body.TriggerData
+	if triggerData == nil {
+		triggerData = map[string]interface{}{}
+	}
+	result, err := eng.Execute(context.Background(), target.ID, triggerData)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	log.Printf("[API] Ran pipeline %q -> %s", target.ID, result.Status)
+	s.publishPipelineOutput(target, result)
 	writeJSON(w, result)
 }
 
@@ -627,7 +743,7 @@ func writeJSON(w http.ResponseWriter, v interface{}) {
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

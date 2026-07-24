@@ -38,15 +38,33 @@ func (h *ThresholdHandler) GetFunction() *functions.Function {
 	}
 }
 
+// asFloat64 handles both float64 and int — see the identical helper's
+// comment in internal/functions/calculates/cost.go for why: yaml.v3 decodes
+// a plain integer literal in a pipeline YAML's config as Go `int`, not
+// `float64`, so a bare `.(float64)` assertion silently misses it.
+func asFloat64(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case float32:
+		return float64(n), true
+	}
+	return 0, false
+}
+
 // Execute vérifie le seuil
 func (h *ThresholdHandler) Execute(durationSeconds float64, config map[string]interface{}) (*ThresholdResult, error) {
 	min := 30.0  // défaut 30 secondes
 	max := 180.0 // défaut 3 minutes
 
-	if minVal, ok := config["min"].(float64); ok {
+	if minVal, ok := asFloat64(config["min"]); ok {
 		min = minVal
 	}
-	if maxVal, ok := config["max"].(float64); ok {
+	if maxVal, ok := asFloat64(config["max"]); ok {
 		max = maxVal
 	}
 

@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MindSet Data — Prosys OPC UA Simulation Server node structure.
+  Import via Prosys: Objects menu -> Import Nodeset2 XML (or File -> Import).
+
+  Recreates the factory hierarchy this project's ISA-95 mapper expects
+  (internal/uns/mapper.go, 4-level convention documented there and in
+  docs/analysis_log.md Entry 97/98): Site.Line.Machine.Tag, where the raw
+  OPC-UA tag name is built by internal/discovery/opcua.go's browseNode()
+  concatenating each nested Object's BrowseName with dots as it walks the
+  tree — NOT a literal dotted node name. So this file defines real nested
+  Objects (Usine_Paris_Nord -> Ligne1/Ligne2 -> Machine1/2/3), not flat nodes.
+
+  Structure (matches what was live-verified against this project's KG/entity
+  resolution earlier — machine1+machine2 under Ligne1, machine3 under Ligne2):
+    Usine_Paris_Nord
+      Ligne1
+        Machine1 { status: Boolean, temperature: Double }
+        Machine2 { status: Boolean, temperature: Double }
+      Ligne2
+        Machine3 { status: Boolean, temperature: Double }
+
+  After import: Prosys's own auto-value-simulation is NOT part of the
+  standard NodeSet2 format (it's a Prosys-specific runtime setting) — for
+  each "status"/"temperature" Variable, right-click it in Prosys -> Simulation
+  -> enable, so values actually change over time instead of staying static.
+  "status" (Boolean) is the one internal/discovery's isStatusTag()-equivalent
+  logic keys off of for Run/Stop detection — make sure it's the one you
+  enable simulation on if you only do one.
+-->
+<UANodeSet xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+           xmlns="http://opcfoundation.org/UA/2011/03/UANodeSet.xsd"
+           xmlns:uax="http://opcfoundation.org/UA/2008/02/Types.xsd">
+  <NamespaceUris>
+    <Uri>urn:mindset:simulation</Uri>
+  </NamespaceUris>
+
+  <Aliases>
+    <Alias Alias="Boolean">i=1</Alias>
+    <Alias Alias="Double">i=11</Alias>
+    <Alias Alias="Organizes">i=35</Alias>
+    <Alias Alias="HasComponent">i=47</Alias>
+    <Alias Alias="HasTypeDefinition">i=40</Alias>
+    <Alias Alias="BaseObjectType">i=58</Alias>
+    <Alias Alias="BaseDataVariableType">i=63</Alias>
+  </Aliases>
+
+  <!-- ==================== Usine_Paris_Nord ==================== -->
+  <UAObject NodeId="ns=1;i=1000" BrowseName="1:Usine_Paris_Nord">
+    <DisplayName>Usine_Paris_Nord</DisplayName>
+    <References>
+      <Reference ReferenceType="Organizes" IsForward="false">i=85</Reference>
+      <Reference ReferenceType="HasTypeDefinition">i=58</Reference>
+      <Reference ReferenceType="Organizes">ns=1;i=1001</Reference>
+      <Reference ReferenceType="Organizes">ns=1;i=1008</Reference>
+    </References>
+  </UAObject>
+
+  <!-- ==================== Ligne1 ==================== -->
+  <UAObject NodeId="ns=1;i=1001" BrowseName="1:Ligne1">
+    <DisplayName>Ligne1</DisplayName>
+    <References>
+      <Reference ReferenceType="Organizes" IsForward="false">ns=1;i=1000</Reference>
+      <Reference ReferenceType="HasTypeDefinition">i=58</Reference>
+      <Reference ReferenceType="Organizes">ns=1;i=1002</Reference>
+      <Reference ReferenceType="Organizes">ns=1;i=1005</Reference>
+    </References>
+  </UAObject>
+
+  <!-- == Machine1 == -->
+  <UAObject NodeId="ns=1;i=1002" BrowseName="1:Machine1">
+    <DisplayName>Machine1</DisplayName>
+    <References>
+      <Reference ReferenceType="Organizes" IsForward="false">ns=1;i=1001</Reference>
+      <Reference ReferenceType="HasTypeDefinition">i=58</Reference>
+      <Reference ReferenceType="HasComponent">ns=1;i=1003</Reference>
+      <Reference ReferenceType="HasComponent">ns=1;i=1004</Reference>
+    </References>
+  </UAObject>
+  <UAVariable NodeId="ns=1;i=1003" BrowseName="1:status" DataType="Boolean" AccessLevel="3" UserAccessLevel="3">
+    <DisplayName>status</DisplayName>
+    <References>
+      <Reference ReferenceType="HasComponent" IsForward="false">ns=1;i=1002</Reference>
+      <Reference ReferenceType="HasTypeDefinition">i=63</Reference>
+    </References>
+    <Value>
+      <uax:Boolean>true</uax:Boolean>
+    </Value>
+  </UAVariable>
+  <UAVariable NodeId="ns=1;i=1004" BrowseName="1:temperature" DataType="Double" AccessLevel="3" UserAccessLevel="3">
+    <DisplayName>temperature</DisplayName>
+    <References>
+      <Reference ReferenceType="HasComponent" IsForward="false">ns=1;i=1002</Reference>
+      <Reference ReferenceType="HasTypeDefinition">i=63</Reference>
+    </References>
+    <Value>
+      <uax:Double>42.0</uax:Double>
+    </Value>
+  </UAVariable>
+
+  <!-- == Machine2 == -->
+  <UAObject NodeId="ns=1;i=1005" BrowseName="1:Machine2">
+    <DisplayName>Machine2</DisplayName>
+    <References>
+      <Reference ReferenceType="Organizes" IsForward="false">ns=1;i=1001</Reference>
+      <Reference ReferenceType="HasTypeDefinition">i=58</Reference>
+      <Reference ReferenceType="HasComponent">ns=1;i=1006</Reference>
+      <Reference ReferenceType="HasComponent">ns=1;i=1007</Reference>
+    </References>
+  </UAObject>
+  <UAVariable NodeId="ns=1;i=1006" BrowseName="1:status" DataType="Boolean" AccessLevel="3" UserAccessLevel="3">
+    <DisplayName>status</DisplayName>
+    <References>
+      <Reference ReferenceType="HasComponent" IsForward="false">ns=1;i=1005</Reference>
+      <Reference ReferenceType="HasTypeDefinition">i=63</Reference>
+    </References>
+    <Value>
+      <uax:Boolean>true</uax:Boolean>
+    </Value>
+  </UAVariable>
+  <UAVariable NodeId="ns=1;i=1007" BrowseName="1:temperature" DataType="Double" AccessLevel="3" UserAccessLevel="3">
+    <DisplayName>temperature</DisplayName>
+    <References>
+      <Reference ReferenceType="HasComponent" IsForward="false">ns=1;i=1005</Reference>
+      <Reference ReferenceType="HasTypeDefinition">i=63</Reference>
+    </References>
+    <Value>
+      <uax:Double>41.5</uax:Double>
+    </Value>
+  </UAVariable>
+
+  <!-- ==================== Ligne2 ==================== -->
+  <UAObject NodeId="ns=1;i=1008" BrowseName="1:Ligne2">
+    <DisplayName>Ligne2</DisplayName>
+    <References>
+      <Reference ReferenceType="Organizes" IsForward="false">ns=1;i=1000</Reference>
+      <Reference ReferenceType="HasTypeDefinition">i=58</Reference>
+      <Reference ReferenceType="Organizes">ns=1;i=1009</Reference>
+    </References>
+  </UAObject>
+
+  <!-- == Machine3 == -->
+  <UAObject NodeId="ns=1;i=1009" BrowseName="1:Machine3">
+    <DisplayName>Machine3</DisplayName>
+    <References>
+      <Reference ReferenceType="Organizes" IsForward="false">ns=1;i=1008</Reference>
+      <Reference ReferenceType="HasTypeDefinition">i=58</Reference>
+      <Reference ReferenceType="HasComponent">ns=1;i=1010</Reference>
+      <Reference ReferenceType="HasComponent">ns=1;i=1011</Reference>
+    </References>
+  </UAObject>
+  <UAVariable NodeId="ns=1;i=1010" BrowseName="1:status" DataType="Boolean" AccessLevel="3" UserAccessLevel="3">
+    <DisplayName>status</DisplayName>
+    <References>
+      <Reference ReferenceType="HasComponent" IsForward="false">ns=1;i=1009</Reference>
+      <Reference ReferenceType="HasTypeDefinition">i=63</Reference>
+    </References>
+    <Value>
+      <uax:Boolean>true</uax:Boolean>
+    </Value>
+  </UAVariable>
+  <UAVariable NodeId="ns=1;i=1011" BrowseName="1:temperature" DataType="Double" AccessLevel="3" UserAccessLevel="3">
+    <DisplayName>temperature</DisplayName>
+    <References>
+      <Reference ReferenceType="HasComponent" IsForward="false">ns=1;i=1009</Reference>
+      <Reference ReferenceType="HasTypeDefinition">i=63</Reference>
+    </References>
+    <Value>
+      <uax:Double>43.2</uax:Double>
+    </Value>
+  </UAVariable>
+
+</UANodeSet>

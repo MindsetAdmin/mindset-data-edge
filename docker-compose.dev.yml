@@ -1,0 +1,77 @@
+services:
+  #MQTT Broker
+  mosquitto :
+    image :  eclipse-mosquitto:2
+    container_name : broker_mindset
+    restart : unless-stopped
+    ports :
+      - "1883:1883"
+      - "9001:9001"
+    command : mosquitto -c mosquitto-no-auth.conf
+    networks :
+      - mindset-network
+
+
+  #fake ERP Database
+  mysql-erp:
+    image: mysql:8
+    container_name: mindset-erp
+    restart: unless-stopped
+    ports:
+      # Host 3308 → container 3306. Windows dev machines often already have a
+      # local mysqld.exe bound to 3306 or 3307 (verified 2026-07-18: a XAMPP
+      # install on this machine was squatting on 3307, the port this file used
+      # to map to — moved to 3308 for the same reason 3306 was avoided
+      # originally). If you're on a clean box you can change to 3306:3306 —
+      # remember to also update the default DSN in cmd/erpsim/main.go and
+      # config/connections.yaml.
+      - "3308:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: rootdev
+      MYSQL_DATABASE: fake_erp
+      MYSQL_USER : mindset_readonly
+      MYSQL_PASSWORD : readonly_dev
+      # NB: MYSQL_USER/MYSQL_PASSWORD intentionally NOT set — that flow
+      # auto-grants ALL PRIVILEGES, which breaks the read-only enforcement.
+      # Both mindset_readonly and mindset_writer are created explicitly in
+      # sim/erp/grant.mysql.sql, with the exact grants we want.
+    volumes:
+      - ./sim/erp/schema.mysql.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./sim/erp/seed.mysql.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+      - ./sim/erp/grant.mysql.sql:/docker-entrypoint-initdb.d/03-grant.sql:ro
+      - erp-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-uroot", "-prootdev"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - mindset-network
+   
+  # erpsim
+  erpsim:
+    build :
+      context : .
+      dockerfile : Dockerfile.erpsim
+    container_name: erpsim_mindset
+    environment: 
+      MINDSET_ERP_PASSWORD: readonly_dev
+      MYSQL_HOST: mysql-erp
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: fake_erp
+      MYSQL_USER: mindset_readonly
+    depends_on:
+      mysql-erp:
+        condition: service_healthy   # Wait for MySQL to be ready
+    restart: unless-stopped
+    networks:
+      - mindset-network
+
+networks:
+  mindset-network:
+    driver: bridge
+
+
+volumes:
+  erp-data:
+    driver: local

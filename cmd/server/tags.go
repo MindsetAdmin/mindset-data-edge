@@ -22,18 +22,56 @@ type Tag struct {
 // updated from mindset/raw/# and persisted to the shared SQLite DB so tags still
 // show in the UI when the agent isn't running.
 type TagRegistry struct {
-	mu   sync.RWMutex
-	tags map[string]Tag
-	db   *sql.DB
+	mu        sync.RWMutex
+	tags      map[string]Tag
+	db        *sql.DB
+	persistCh chan Tag
 }
 
+// persistQueueSize is generous relative to real update rates (a handful of
+// tags updating at most a few times/sec) so it only ever fills if the DB
+// writer is genuinely stuck, not from ordinary bursts.
+const persistQueueSize = 256
+
 func NewTagRegistry(db *sql.DB) *TagRegistry {
-	r := &TagRegistry{tags: make(map[string]Tag), db: db}
+	r := &TagRegistry{tags: make(map[string]Tag), db: db, persistCh: make(chan Tag, persistQueueSize)}
 	if db != nil {
 		r.ensureTable()
 		r.loadFromDB()
+		go r.persistLoop()
 	}
 	return r
+}
+
+// persistLoop is the only goroutine that ever writes to the tags table.
+// upsert() hands it work over persistCh instead of writing inline (Entry
+// 136): this SQLite file is also written concurrently by cmd/agent's KG
+// subscriber and server.exe's own KG writes, and tag updates arrive multiple
+// times per second per tag — a live incident showed the MQTT callback
+// goroutine that drives the whole dashboard (tags, topic counters, machine
+// state) going completely silent mid-session with no error logged anywhere,
+// while the underlying OPC-UA subscription and MQTT publish kept running
+// fine. The only blocking I/O on that callback's path was this DB write, and
+// PRAGMA busy_timeout (Entry 131) bounds SQLite-level lock waits but not
+// every possible driver/OS-level contention mode with a pure-Go SQLite
+// driver under sustained concurrent writers. Moving persistence off the live
+// path makes that class of freeze structurally impossible: a stuck DB write
+// can now only stall this one background goroutine, never the live
+// dashboard/tag/state pipeline, which is served entirely from the in-memory
+// map upsert() updates synchronously before ever touching persistCh.
+func (r *TagRegistry) persistLoop() {
+	for t := range r.persistCh {
+		valBytes, _ := json.Marshal(t.Value)
+		_, err := r.db.Exec(`INSERT INTO tags (node_id, name, value, data_type, timestamp_ms, updated_at)
+			VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+			ON CONFLICT(node_id) DO UPDATE SET
+				name=excluded.name, value=excluded.value, data_type=excluded.data_type,
+				timestamp_ms=excluded.timestamp_ms, updated_at=CURRENT_TIMESTAMP`,
+			t.NodeID, t.Name, string(valBytes), t.DataType, t.Timestamp)
+		if err != nil {
+			log.Printf("[TAGS] persist: %v", err)
+		}
+	}
 }
 
 func (r *TagRegistry) ensureTable() {
@@ -72,16 +110,15 @@ func (r *TagRegistry) upsert(t Tag) {
 	r.tags[t.NodeID] = t
 	r.mu.Unlock()
 
-	if r.db != nil {
-		valBytes, _ := json.Marshal(t.Value)
-		_, err := r.db.Exec(`INSERT INTO tags (node_id, name, value, data_type, timestamp_ms, updated_at)
-			VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-			ON CONFLICT(node_id) DO UPDATE SET
-				name=excluded.name, value=excluded.value, data_type=excluded.data_type,
-				timestamp_ms=excluded.timestamp_ms, updated_at=CURRENT_TIMESTAMP`,
-			t.NodeID, t.Name, string(valBytes), t.DataType, t.Timestamp)
-		if err != nil {
-			log.Printf("[TAGS] upsert: %v", err)
+	if r.persistCh != nil {
+		select {
+		case r.persistCh <- t:
+		default:
+			// Queue full — persistLoop is falling behind or stuck. Drop this
+			// sample rather than block the live MQTT callback: the in-memory
+			// map above (what every live read actually serves) is already
+			// correct, and the next tick will offer a fresher value anyway.
+			log.Printf("[TAGS] persist queue full, dropping sample for %s", t.NodeID)
 		}
 	}
 }

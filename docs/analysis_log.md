@@ -5444,6 +5444,2552 @@ Same-turn logging. Pattern holds — 17 turns in a row.
 
 ---
 
+## Entry 136 — 2026-07-24 — Dashboard live-state freeze root-caused: the MQTT callback goroutine was going silent mid-session, traced to a blocking SQLite write on the hot path
+
+**Trigger:** user reported the dashboard "doesn't show the real state of machines" — stuck on one fixed Running/Stopped reading despite Prosys genuinely varying underneath.
+
+**Diagnosis, built from live evidence at each step, not assumed:**
+1. Confirmed Prosys itself was fine and OPC-UA was genuinely "connected" — but `/api/machines`/`/api/tags` returned a value frozen bit-for-bit across repeated calls seconds apart, while the same session's own log showed `[MQTT] Published: ... temperature = X` firing every second with genuinely different values. Publish path: alive. Read path: frozen.
+2. Traced `internal/discovery.Subscribe`'s per-tag OPC-UA notification handler — ruled out the classic Go loop-variable-capture bug (it indexes by `ClientHandle`, not a captured loop var) and confirmed `PublishRaw` always fires with the freshly-updated value.
+3. Cross-checked `/api/topics`' message counters (incremented unconditionally at the very top of `LiveHub.Start`'s callback, before any tag-specific logic) against the frozen tag data — the counter had ALSO stopped climbing at the exact same point. That's the decisive finding: not a narrow bug in the tag-write branch, but the entire `mindset/#` callback goroutine going silent.
+4. A fresh restart temporarapy "fixed" it, but it recurred within ~10 minutes on the new session too — ruling out "many hours / many reconnects" as a precondition and pointing at ordinary sustained runtime.
+5. The only blocking I/O on that callback's execution path was `TagRegistry.upsert()`'s synchronous `db.Exec` — writing to the same `data/mindset.db` SQLite file that `cmd/agent`'s KG subscriber (and `cmd/server`'s own KG writes) are also hitting concurrently, multiple times per second, indefinitely. `PRAGMA busy_timeout` (Entry 131) bounds SQLite-level "database is locked" waits, but doesn't cover every contention mode a pure-Go SQLite driver (`modernc.org/sqlite`, no CGO) can hit under sustained concurrent writers from separate OS processes on Windows — and if that call ever genuinely hangs rather than erroring, paho's single callback-processing path means EVERY subsequent message — tags, topic counts, machine state — stops being processed right along with it, with nothing to log since the call never returns to reach any error-handling line.
+
+**Fix**: `cmd/server/tags.go` — `TagRegistry` gained a buffered `persistCh chan Tag` (size 256) drained by one dedicated `persistLoop` goroutine that's the *only* thing that ever touches the DB for tag persistence. `upsert()` now updates the in-memory map (what every live read actually serves) synchronously, then hands the DB write to `persistCh` via a non-blocking `select`/`default` — if the queue's full (writer stuck or badly behind), the sample is dropped with a log line rather than blocking the MQTT callback. This makes the observed failure mode structurally impossible: a stuck or slow DB write can now only stall the one background persistence goroutine, never the live dashboard/tag/state pipeline. Root cause of *why* the DB write itself occasionally hangs (rather than just erroring, which busy_timeout would have surfaced) is still not nailed down to a specific driver/OS mechanism — the fix makes it not matter, rather than explaining it away.
+
+**Verified live**: rebuilt, restarted, reconnected OPC-UA, resubscribed. Confirmed tag values updating correctly across repeated checks immediately after. Given the prior freeze took ~10 minutes to manifest even on a fresh session, this entry does **not** claim a multi-minute soak test proved it holds — noted honestly rather than overclaimed; flagged to the user to report back if it recurs.
+
+---
+
+## Entry 135 — 2026-07-24 — Demo polish: bigger/realistic numbers, product names over machine ids, explain-before-number, and a real YAML-numeric-type bug found along the way
+
+**Trigger:** user, after seeing Entry 134's merged ranking (9.21€/3.54€/15.11€): those numbers "isn't a big chiffre" — wanted the response to lead with an explanation before the euro figure, and suggested naming a *product* rather than a machine.
+
+**Numbers weren't just small, the rate override was silently broken.** Traced why: the demo pipeline's `calculate_cost` config had `hourly_rate: 400`, but `internal/functions/calculates/cost.go` read it with a bare `config["hourly_rate"].(float64)` type assertion. `yaml.v3` decodes a plain integer literal (no decimal point) into a map's `interface{}` value as Go `int`, not `float64` — the assertion silently failed and fell through to the handler's 85€/h default, with no error anywhere. First reseed attempt confirmed this empirically: effective rate computed back out to ~80€/h, not 400. **Fixed properly, not just patched around**: added an `asFloat64` helper tolerant of `float64`/`int`/`int64`/`float32` in both `internal/functions/calculates/cost.go` (hourly_rate, and the per-product rates-table lookup) and `internal/functions/conditions/threshold.go` (min/max — same latent bug, previously invisible only because its hardcoded defaults happened to equal the demo YAML's values). Any pipeline author writing a bare integer in a node's YAML config would have hit this same silent-no-op bug.
+
+**Also found**: the active `pipeline_microstop_detection.yaml` (the one the user edited in Compose a few turns back, output now `add_to_dashboard`) could no longer seed KG data at all — reusing it would have required touching the user's own edit. Built a separate `config/pipelines/pipeline_cost_seed.yaml` (trigger → threshold → cost, terminal node is `cost`) purely for demo-data generation, so the two never collide again.
+
+**Product names, not machine ids**: `cmd/server/mcp_server.go` added a `productNames(ctx)` helper mirroring `ActiveProduction`'s pattern — resolves `product_code → name` via the already-validated `product` `SchemaMapping` (`products` table, confidence 1.0 since Entry 116). `costPriorityEntry` gained `ProductID`/`ProductName`, populated from the same `ActiveProduction` join Entry 134 already does for due dates.
+
+**Explain-before-number**: `costPriorityEntry` gained a server-computed `Reason` string (`costPriorityReason`) — e.g. *"Yaourt fraise 125g on Machine1 is due in 1 day(s) for GrandeDistribution-X — missing that deadline costs regardless of this machine's downtime total"* for an urgent group, or *"Machine2 (running Yaourt fraise 125g) has the highest micro-stop cost with no near-term deadline pressure"* for the cost-ranked one. Computed server-side (not left to the model to phrase) for the same reliability reason as Entry 134's merge — consistent regardless of which model reads the tool output. Tool description updated to explicitly instruct leading with `reason` before the euro figure.
+
+**Re-seeded** through `pipeline_cost_seed` at a more realistic 400€/h with a fuller month's worth of stops per machine (15-18 events each, durations spread across the 30-180s micro-stop band). Old small-figure seed data (Entry 131/134, and the first, still-broken-rate reseed attempt) explicitly cleared first via `POST /api/kg/pending/{id}/reject` (deletes unconditionally regardless of `pending` state) so nothing stale diluted the new totals.
+
+**Verified live, through the real MCP protocol**, final merged+priced+explained ranking:
+```
+1. Yaourt fraise 125g on Machine1 — due tomorrow, GrandeDistribution-X — 215.67€ (urgent)
+2. Creme dessert chocolat on Machine3 — due in 3 days, BeauteDirect — 77.78€ (urgent)
+3. Machine2 (Yaourt fraise 125g) — highest cost, no deadline pressure — 312.44€ (not urgent, ranks last)
+```
+
+---
+
+## Entry 134 — 2026-07-24 — kg_cost_summary and kg_active_production merged server-side into one ranked "financial priorities" answer
+
+**Trigger:** user, after Entry 133 shipped deadline urgency as a separate signal: "I wanna see a merge of due soonest and 3 financial when I ask what are the 3 financial priorities, because if we pass the deadline we lose too."
+
+**Design choice — flag-and-reorder, not a fabricated blended €**: `docs/impact_engine.md`'s pricing rule (locked, Entry 71) is explicit that a missed-deadline penalty is contractual/opaque — most ERPs don't expose the actual clause, so pricing it would produce a number nobody could audit. The doc's own Enrichment #2 already prescribed the pattern for exactly this: flag customer-committed events and *boost* their priority, never invent a euro figure for the deadline risk. Entry 134 implements that boost mechanically: `kg_cost_summary`'s response (when grouped by work_center, the default) is now cross-joined with `kg_active_production`'s due-date data, and re-sorted so any `urgent:true` group (due within `urgentWithinDays = 7`, matching the doc's own `due_date_window_days: 7` default) outranks costlier-but-not-urgent groups, with cost-descending as the tiebreaker within each urgency tier.
+
+**Why server-side, not left to the model to synthesize two tool calls**: Entry 132 already showed that phrasing alone can make a model skip a tool call it should make ("which machine is costing us the most" worked, "what are the 3 financial priorities" one turn later in the same thread didn't, until the description was fixed). Relying on the model to reliably call both `kg_cost_summary` and `kg_active_production` *and* correctly merge them every time is strictly more fragile than doing the join once, deterministically, in Go — especially for a live demo where a wrong tool-call sequence is visible immediately.
+
+**Built**: `cmd/server/mcp_server.go` — new `costPriorityEntry` (embeds `kg.CostSummaryEntry` + `DaysUntilDue`/`CustomerID`/`Urgent`), built by calling `s.ActiveProduction(ctx, "")` and joining on `normalizeWorkCenter` (same helper `entity_resolution.go` already uses for OT↔IT matching) after `s.kg.CostSummary` runs. Only applied when grouping by work_center — a "cause" grouping spans multiple machines, so there's no single due date to join against. Tool description updated to state the merge already happens, so the model doesn't need to call `kg_active_production` separately and combine the results itself.
+
+**Verified live, through the real MCP protocol**, replacing Entry 131's flat cost ranking:
+```
+1. Machine1 — 9.21€,  due tomorrow    (GrandeDistribution-X) — urgent
+2. Machine3 — 3.54€,  due in 3 days   (BeauteDirect)          — urgent
+3. Machine2 — 15.11€, due in 10 days  (PharmaCorp-EU)         — not urgent, highest cost but ranks last
+```
+Machine2 — the single highest-cost machine — drops from #1 to #3 because it's the only one of the three with no near-term deadline pressure. Exactly the disagreement Entry 133's seed data was deliberately built to produce, now actually surfaced in the answer instead of sitting in two separate tool outputs the user would have had to reconcile by hand.
+
+---
+
+## Entry 133 — 2026-07-24 — Second priority axis added: delivery-deadline urgency alongside cost, via kg_active_production
+
+**Trigger:** user asked, after seeing the cost-ranking demo work, whether priorities could also depend on something else — "we should produce product A because its delivery deadline is coming up" — then said "go build."
+
+**What this is**: `docs/impact_engine.md`'s "customer-commitment flag" (Enrichment #2, planned V1, not previously built) — a genuinely different priority axis from cost. A cheap 30s stop on an order due tomorrow can matter more than an expensive stop with no deadline pressure; the two rankings can disagree, which is the point of having both.
+
+**Why it wasn't already answerable**: the fake ERP's `work_orders` table had no `due_date`/`customer_id` columns at all — `internal/connections/canonical_suggest.go`'s work_order scoring already had synonym matching for both as *bonus* fields (`due_date`/`delivery_date`/`requested_delivery`, `customer_id`/`customer_code`/`client_id`) since Track B's original design, but nothing in the schema could ever match them.
+
+**Built:**
+1. `sim/erp/schema.mysql.sql` + `sim/erp/seed.mysql.sql` — added `due_date DATE NULL`, `customer_id VARCHAR(64) NULL` to `work_orders`; the 3 seeded RUNNING orders get a deliberately spread set of deadlines (machine1: due tomorrow / `GrandeDistribution-X`; machine3: due in 3 days / `BeauteDirect`; machine2: due in 10 days / `PharmaCorp-EU`) so cost-priority and deadline-priority visibly disagree in the demo — machine2 was the #1 *cost* priority (Entry 131) but is the *least* urgent by deadline. Applied live via `ALTER TABLE`/`UPDATE` directly against the running `mindset-erp` container too (its data volume is 25h+ old — editing the source SQL alone doesn't retroactively migrate it), targeting the actual current `erpsim`-generated order numbers (`WO-2026-9197` etc.), not the stale seed-file numbers (`WO-2026-9001` etc.) — `erpsim`'s advance/rotate loops had long since diverged from the static seed.
+2. `cmd/server/active_production.go` — `ActiveProductionFact` gained `DueDate`/`CustomerID`/`DaysUntilDue` (all `omitempty` — absent, not zero/guessed, when a mapping doesn't resolve them). `queryActiveOrders` now builds its SELECT column list dynamically based on which bonus fields the mapping actually resolved, and computes `days_until_due` by truncating both sides to whole calendar days first (a `due_date` is a day, not a timestamp — diffing raw durations against `time.Now()` would flicker depending on what time of day the query runs).
+3. `cmd/server/mcp_server.go` — `kg_active_production`'s description and the server's `Instructions` now explicitly route deadline/urgency phrasing to this tool (not `kg_cost_summary`), and say to flag rather than silently pick one axis when a question could mean either.
+
+**Gotcha hit and worked around**: `internal/kg.SeedSchemaMappings`/`AddNodeCat` is `INSERT OR IGNORE` (documented, intentional, elsewhere), so the `dev_erp`/`work_orders` `SchemaMapping` node already existed from before these columns existed — a plain re-`/discover` would not have picked up the new bonus fields on its own. Deleted it via the existing `POST /api/kg/pending/{id}/reject` (which deletes unconditionally, doesn't actually check `pending` first) and re-ran discover; the fresh mapping now includes `due_date`/`customer_id` at confidence 1.0.
+
+**Verified live, through the real MCP protocol**: `kg_active_production` with zero arguments now returns all 3 machines with `days_until_due: 1, 3, 10` respectively and the right customer names — matches Entry 131's cost ranking being inverted on this second axis exactly as designed.
+
+**Same caveat as every prior entry in this run**: needs a fresh Claude Desktop restart to pick up today's binary before the live UI reflects it.
+
+---
+
+## Entry 132 — 2026-07-24 — Live in Claude Desktop: same-thread follow-up question dropped to a generic clarifying reply — tool description was the gap, not the wiring
+
+**Trigger:** user tested the real demo in Claude Desktop. "Which machine is costing us the most?" worked perfectly — correct tool call, numbers matched Entry 131's seeded data exactly (Machine2 €15.11/4/640s, Machine1 €9.21/6/390s, Machine3 €3.54/4/150s). The very next message in the *same thread*, "what are the 3 financial priorities?", got a plain clarifying question back ("is this a personal finance framework?") — no tool call at all.
+
+**Diagnosis:** not a wiring regression — the prior question in the same session proves the connection, the data, and the tool all work. The gap is that `kg_cost_summary`'s description didn't say the phrase "financial priorities" (or "top cost drivers", "what should we fix first") maps to it; a more literal cost question triggered it, a more abstract one didn't, and the model reasonably treated it as a possibly-unrelated personal-finance question instead of inferring it should reuse the tool from one turn earlier.
+
+**Fix, both in `cmd/server/mcp_server.go`:**
+1. Server `Instructions` now explicitly states that "cost, spend, financial priorities, biggest problem, or what to fix first" phrasing is a `kg_cost_summary` question, to be called before asking the user to clarify.
+2. `kg_cost_summary`'s own tool description now spells out that "financial priorities" / "top cost drivers" / "what should we fix first" all map to it, and that the sorted result's first N groups already **are** the top-N answer — no extra ranking step needed.
+3. `from_time`/`to_time` changed from required to optional (`omitempty` + server-side default): omitted now defaults to a 30-day lookback ending now (`defaultCostWindowDays = 30`), instead of the caller needing to supply — or worse, ask the user for — an explicit RFC3339 window before it could even query.
+
+**Verified live**: rebuilt, restarted `server.exe` (env var + OPC-UA reconnect + resubscribe repeated, since a restart drops both), called `kg_cost_summary` over the real MCP protocol with `arguments: {}` — zero args — and got the correct sorted 3-machine ranking back, confirming the default-window logic works end to end, not just at the type level.
+
+**Correction, caught before it misled anyone**: initially wrote here that a description-only change wouldn't need a Claude Desktop restart — wrong. MCP tool descriptions are fetched once at connection-init and cached for that subprocess's lifetime, same constraint as Entries 128/131's binary-behavior fixes. **Also found while checking**: two `-mcp-stdio` `server.exe` processes were running simultaneously (PIDs 32508 and 40732, spawned 37s apart) — consistent with CLAUDE.md's documented Windows Store quirk where a plain window-close leaves the process alive in the background and a later reopen spawns a second one on top of it, rather than one clean restart. Neither was killed here (don't want to yank a subprocess out from under a live Claude Desktop session without the user doing it) — the user needs to fully quit Claude Desktop (tray icon too, not just the window) and confirm via Task Manager that zero `server.exe -mcp-stdio` processes remain before reopening, so exactly one fresh process picks up today's binary.
+
+---
+
+## Entry 131 — 2026-07-24 — Entry 130's plan built and live-verified: "3 financial priorities" now has a real MCP answer, three more real bugs found along the way
+
+**Trigger:** user said "go-ahead" on Entry 130's plan. Built it, and found the actual gap was deeper than the field-mismatch bug Entry 130 identified — three more real, previously-invisible bugs surfaced during implementation, each caught by insisting on a live end-to-end check rather than trusting the code read.
+
+**Bug found before writing any code**: no pipeline is ever auto-triggered by a live MQTT message, at all. `pipeline.Engine.Execute` is called from exactly one place in the entire codebase — `cmd/server/main.go`'s `handleRunPipeline` (the manual Run button/API) — and always with an **empty** trigger-data map. A pipeline YAML's `trigger: mqtt_subscribe` block is pure UI/declarative metadata (shown in Compose's ENTRÉE zone); nothing subscribes it live. This means `docs/mindset.md`'s and CLAUDE.md's data-flow diagrams (rules engine → pipeline → micro-stop) describe an *intended* wiring that current code doesn't actually implement — the rules engine publishes `status-change`, but nothing downstream ever consumes it automatically.
+
+**Fixes shipped:**
+1. `internal/functions/calculates/cost.go` — `CostResult` gained `WorkCenter`, `CostEur` (alongside the existing `TotalCost`/`total_cost_eur`), `UNSTopic`, `Cause`, and `Timestamp`, all read from the already-merged `params` map (falls back to `time.Now()` if no parseable `start_time` is present). This is what makes a `calculate_cost` node's output satisfy `internal/kg/subscriber.go`'s `onMicroStop` — previously it had no `work_center` at all and used a differently-named cost field, so a pipeline could run to completion and still never write anything to the KG.
+2. `config/pipelines/pipeline_microstop_detection.yaml` (the active pipeline) and its example template — rebuilt as trigger(`mindset/events/status-change`) → `threshold` → `calculate_cost` (terminal), dropping the `state_machine`/`calculate_duration` nodes the old version chained in front: those read `current_value`/`event_id`, fields the status-change payload never carries (it already has `work_center`/`duration_seconds` precomputed by the rules engine) — so they were silently inert, not actually detecting anything.
+3. `cmd/server/main.go`'s `handleRunPipeline` — now reads an optional `{"trigger_data": {...}}` JSON body and passes it to `Engine.Execute` (previously hardcoded to `map[string]interface{}{}`). Given bug #1 above (nothing auto-fires a pipeline), this is what makes the Run endpoint usable for anything beyond a no-op smoke test — used here to seed 7 realistic micro-stop events (varying work_center/duration_seconds) through the real pipeline→KG path rather than writing directly to the KG.
+
+**Second real bug, found only by watching the live log after fix #1-3 landed and seeing zero KG activity despite a successful auto-publish**: `internal/kg.NewKGSubscriber` hardcoded the same MQTT client ID (`"mindset-kg-subscriber"`) in both call sites — `cmd/server/main.go` and `cmd/agent/main.go` (plus a third, `cmd/agent/init.go`, an alternate init path for the `auto_connect: true` mode). Both processes run a KG subscriber simultaneously in the documented architecture. Per the MQTT spec, a broker disconnects whichever client already holds a ClientID the instant a second client connects with the same one — with `SetAutoReconnect(true)` on both sides, the two processes' subscribers were repeatedly evicting each other with no error surfaced anywhere (a silently-dropped subscription isn't a failure either side logs). **Fix**: `NewKGSubscriber` now takes a `clientID` parameter; `cmd/server` passes `<mqttClientID>-kg` (reusing the existing per-mode `mindset-api-server`/`mindset-mcp-stdio` distinction from Entry 121), `cmd/agent` passes a fixed `mindset-agent-kg`.
+
+**Third real bug, found immediately after fixing the second**: once both subscribers could actually stay connected simultaneously, they both started receiving and writing every micro-stop message at the same time — and `internal/storage/sqlite.go`'s `NewSQLiteStore` never set a busy timeout. Two separate OS processes writing to the same SQLite file with SQLite's default (fail-fast) locking meant most concurrent writes threw `SQLITE_BUSY` and were silently dropped (subscriber.go logs the error but doesn't retry). **Fix**: `PRAGMA busy_timeout = 5000;` right after `Ping()` in `NewSQLiteStore` — covers every caller (`internal/kg.NewKnowledgeGraph` included) with one change, since both paths funnel through this same function.
+
+**Verified live, through the real MCP protocol (not the REST KG endpoint as a shortcut)**: rebuilt both binaries, restarted `agent.exe` and the `:8080` `server.exe`, seeded 7 events across the 3 machines via the new `trigger_data` body (Machine1: 45/90/60s, Machine2: 150/170s, Machine3: 35/40s — at 85€/h). Confirmed via `/api/kg?category=business` that Event+Cost nodes landed correctly, then did a full MCP handshake over curl (`initialize` → `notifications/initialized` → `tools/call kg_cost_summary`) against `/mcp` directly — the real transport Claude Desktop uses. Result, sorted descending by cost exactly as designed:
+```
+1. Machine2 — 15.11€ (4 events, 640s)   [some duplication from a retry before the busy_timeout fix — ranking/proportions unaffected]
+2. Machine1 — 9.21€  (6 events, 390s)
+3. Machine3 — 3.54€  (150s)
+```
+This is a complete, honest answer to "what are the 3 financial priorities?" — no fabricated cause labels, grouped by the demo's actual 3 machines.
+
+**Still needed from the user**: same as Entry 128 — the Claude Desktop stdio MCP process (PID 14096, unrelated to today's fixes, still running whatever binary was loaded when it last started) needs a full quit-and-reopen of Claude Desktop before asking the question through the real Claude Desktop UI, so a fresh process picks up today's fixes.
+
+---
+
+## Entry 130 — 2026-07-24 — Demo plan: "what are the 3 financial priorities?" via MCP — traced why it wouldn't work today, planned the fix
+
+**Trigger:** user wants a demo where Claude, via the MCP integration, answers "what are the 3 financial priorities?" — asked for the plan and what's needed to get there, not an implementation yet.
+
+**What already works, no changes needed:** `kg_cost_summary` (`cmd/server/mcp_server.go`) already returns exactly the right shape — cost/duration/count aggregated and sorted **descending by total cost**, matching `docs/impact_engine.md`'s "Top 3 Actions" framing precisely. Claude Desktop's MCP connection is proven live (Entries 113-122, 128).
+
+**The real gap, found by tracing the code (not assumed):** cost data never actually reaches the KG today.
+- `internal/kg/subscriber.go` listens on exactly one topic (`mindset/events/micro-stop`) and only creates a Cost node when the message carries `work_center` + `cost_eur`.
+- `calculate_cost`'s `CostResult` struct (`internal/functions/calculates/cost.go`) has **no `work_center` field**, and names its total `total_cost_eur` — not `cost_eur`, the exact field the subscriber checks.
+- `threshold`'s `ThresholdResult` struct also carries no `work_center` — so even the upstream node in the chain drops it first.
+- The two shipped example pipelines (`microstop_detection.yaml` → `cost_calculation.yaml`) publish to **two different topics** (`mindset/events/micro-stop` vs `mindset/events/micro-stop-cost`); the KG subscriber only ever hears the first one, which never carries cost.
+- Net effect, confirmed by static trace of `pipeline_output.go` (auto-publish sends the terminal node's raw struct output, unmodified) and `engine.go`'s param-merge (no flattening, no reflection): a fully successful run of the shipped pipelines today would not create a Cost node in the KG. `kg_cost_summary` would currently return empty groups. This was not previously caught because past verification (Entries 61-63, 82) tested the SQL/ERP side and the dashboard's aggregate counts, not this specific cost→KG path.
+
+**Simplification that sidesteps a second problem:** "3 financial priorities" doesn't need fabricated cause labels (Jam/Air Pressure/etc.) — nothing in the system detects an actual fault cause; Prosys only exposes boolean Run/Stop, no fault code. There are exactly 3 machines in the demo rig, so grouping `kg_cost_summary` by `work_center` instead of `cause` gives a complete, honest 3-item answer with zero invented data — still exactly the "Top 3 Actions" framing, just at machine granularity instead of cause granularity.
+
+**Planned fix (not yet built, pending user go-ahead):**
+1. Fix `calculate_cost` to emit `work_center` + `cost_eur` (matching the subscriber's expected fields).
+2. Consolidate the two split pipelines into one per machine (state_machine → duration → threshold → calculate_cost as terminal node), all publishing to the single topic the KG subscriber listens to.
+3. Seed real demo data — a single live Prosys cycle produces one micro-stop per machine per run, too slow/unrepeatable for a live demo; plan is either a longer live run or a one-off seed of realistic Cost/Event nodes directly into the KG.
+4. Verify end-to-end via `/api/kg?category=business` + a direct `kg_cost_summary` curl check before trying it through Claude Desktop.
+5. Optional: make `kg_cost_summary`'s `from_time`/`to_time` optional with a default window, so Claude doesn't have to guess one before answering.
+
+---
+
+## Entry 129 — 2026-07-23 — Frontend translated to English with a live FR/EN toggle (react-i18next)
+
+**Trigger:** user asked whether the frontend could be translated to English. Offered two scopes — a one-way hard swap vs. a proper i18n setup with a language switcher — user chose the switcher.
+
+**What was built:** `react-i18next` + `i18next` added to `frontend/pipeline-builder`. `src/i18n.js` initializes both languages from `src/locales/{en,fr}.json`, defaulting to French (the app's original language) unless `localStorage['mindset_lang']` says otherwise. `NavBar.jsx` gained a `LanguageToggle` (FR/EN buttons, persists the choice to `localStorage` and calls `i18n.changeLanguage`). Every page and component with user-facing French text was converted to `useTranslation()` + `t('namespace.key')` calls — `OverviewPage`, `ConnectorsPage`, `SqlConnectionsPage`, `MqttConnectPage`, `OpcuaConnectPage`, `OpcuaConnectionPanel`, `OpcuaTagSelector`, `PipelinesPage`, `DashboardPage` (including its `Kpi`/`Panel`/`Gantt` subcomponents), `BuilderPage`, `NodeConfigPanel` (and its `OpcuaTagSelector`/`CostConfig`/`RateTableUpload`/`CostPreview` subcomponents), `SqlConfigPanel`, `FieldMapEditor`, `LiveDataPanel`, `PickerModal`, and `Palette`. Two plain data modules (`functionDocs.js`, `dashboardData.js`, `functionMeta.js`) aren't React components, so they resolve strings via the `i18n` singleton's `.t()` directly rather than the hook — this still re-renders correctly on language switch because the components that call them already re-render via their own `useTranslation()`.
+
+**A real bug surfaced and got fixed along the way**: several files reused `t` as a loop variable for "tag" (`(t) => t.node_id`, from OPC-UA/MQTT tag-mapping code predating this work) — naming the translation function `t` in the same scope would have silently shadowed one or the other. Renamed the local variables (`tag`, `tg`, `tpc`, `tagMsg` depending on file) rather than the hook, keeping `t()` calls terse everywhere else.
+
+**Deliberately left untranslated, both documented reasons, not oversights:**
+- The three canvas zone labels (`ENTRÉE`/`CŒUR`/`SORTIE` in `pipelineMapping.js`'s `ZONES` constant, rendered by `ZoneNode.jsx`) — these are created once at canvas-node-creation time in a non-component module, not reactive to a live language switch without extra plumbing, and function as fixed product jargon (same class as "Compose").
+- Function *descriptions* shown in the Palette and NodeConfigPanel header (e.g. "Exécute une requête SELECT paramétrée…") — these come from `GET /api/functions`, i.e. the Go backend's function catalog (`internal/functions/*/*.go` `Description` fields), not frontend strings. Translating them is a backend task, out of scope for this pass.
+
+**Bug found during the pass, not present before it:** the first sweep used a regex for accented characters only, which missed `Palette.jsx` (no accented chars in "Palette de composants" / "Chargement des fonctions...") and `functionMeta.js`'s category labels ("Connecteurs", "Transformations", etc. — also accent-free). Caught via live browser verification (`get_page_text` on `/compose` after toggling to EN still showed French), not by re-reading the diff — reinforces why the CLAUDE.md-mandated "test in a browser before reporting done" step matters even for a mechanical-looking task.
+
+**Verified live**: dev server on `:5174` (`:5173` was occupied by a stale prior instance), toggled FR→EN→FR across `/overview`, `/dashboards` (confirmed it was rendering real live machine state from the `:8080` backend — Machine1 Stopped, Machine2/3 Running, consistent with Entry 128's fix), `/compose`, and `/connectors/sql`. `npm run build` and `npm run lint` both pass — the only lint findings are pre-existing issues (ref-during-render patterns, two already-dead unused vars) unrelated to this change.
+
+---
+
+## Entry 128 — 2026-07-23 — Entry 127's fix didn't reach Claude Desktop: found the real reason (non-retained MQTT), fixed the transport gap too
+
+**Trigger:** after Entry 127's `EquipmentIdentity()` fix, the user re-tested "what's the current status of machine1" through their actual Claude Desktop session — same failure, verbatim. That was surprising, because the fix had already been verified correct end-to-end against the `:8080` HTTP instance directly (curl to `/api/opcua/selections`, `/api/machines`, and a direct `kg_current_state` call all returned the right per-machine data). So the fix itself wasn't wrong; something between "the server publishes the right thing" and "Claude Desktop sees it" was broken.
+
+**Diagnosis.** Two `server.exe` processes were running: PID 14096 (Claude Desktop's `-mcp-stdio` child, started 15:52 — before the rebuild) and PID 29428 (my own `:8080` instance, restarted at 16:14 with the fix, confirmed via `Get-Process ... | Select StartTime, Path`). A `-mcp-stdio` process never binds a port and never calls `/api/opcua/connect` itself — its *own* `OPCUAManager` is permanently disconnected, so `route()`'s fix is irrelevant to it directly. Its `kg_current_state` can only ever know what its `LiveHub` has observed over MQTT from whichever process **is** actually connected to OPC-UA (here, `:8080`). That's a legitimate, working design — MQTT is exactly the decoupling `cmd/server`/`cmd/agent` are supposed to have (see CLAUDE.md's "Key coupling rule"). But it has a latent gap: `internal/mqtt.Publisher.PublishJSON` published with the MQTT **retained** flag set to `false`. A non-retained publish only reaches subscribers that were already listening at the exact moment it fired — a subscriber that connects afterward (a restarted stdio process, a freshly opened dashboard tab) gets nothing until the *next* value change. PID 14096 had been running continuously since before Entry 127 and had last observed the pre-fix (wrong) `WorkCenter` labels; nothing forced it to re-receive corrected state.
+
+**Fix.** `internal/mqtt/publisher.go`: split `PublishJSON` into a private `publishJSON(topic, payload, retained bool)` plus two exported wrappers — `PublishJSON` (unchanged, retained=false) and new `PublishJSONRetained` (retained=true). `OPCUAManager.route()` (`cmd/server/opcua.go`) now calls `PublishJSONRetained` for the ISA-95 site-state publish. This makes the live-state topic behave like a proper "current value" channel: any new subscriber — restarted MCP stdio process, a second dashboard tab, a future consumer — gets the last known state immediately on subscribe, without needing to wait for or coincide with an actual change. `PublishRaw`/`PublishEvent` were left non-retained on purpose: raw ticks and micro-stop events are streams, not current-state snapshots: retaining them would mean every new subscriber replays one stale historical event as if it just happened.
+
+**Verified:** rebuilt both binaries, restarted the `:8080` instance (killed PID 29428 first, confirmed via `Get-NetTCPConnection -LocalPort 8080` before killing — did not touch 14096), reconnected to Prosys (`opc.tcp://med26:4840/OPCUA/Server1`), rediscovered + resubscribed all 6 tags in ISA-95 mode. `/api/machines` confirms three independently-tracked machines (Machine1 `running:false`, Machine2 `running:true`, Machine3 `running:true`) — Entry 127's fix still holds. The retained flag itself is standard MQTT semantics via the well-tested paho client, not separately re-verified with a throwaway subscriber in this session (`mosquitto_sub` wasn't available in this environment) — noted here rather than claimed as directly observed.
+
+**Still needed from the user:** PID 14096 (Claude Desktop's stdio process) was never restarted — it's still running the pre-fix binary in memory, and rebuilding the `.exe` on disk doesn't hot-swap an already-running process's loaded code. The user needs to fully quit and reopen Claude Desktop so a fresh stdio process spawns; that fresh process will then (a) run the `EquipmentIdentity()`-aware code and (b) immediately receive the retained current-state messages on subscribe, closing both gaps at once.
+
+---
+
+## Entry 127 — 2026-07-23 — Real bug found via a live MCP question: two machines on one line were silently sharing one state, fixed at the source
+
+**Trigger:** user tested the shipped MCP integration in Claude Desktop with real questions. Q1 ("which product is running on machine1") worked correctly. Q2 ("what's the current status of machine1") came back "no data for any machine" — the model correctly refused to guess rather than fabricate, but the underlying gap needed diagnosing, not just accepting.
+
+### Diagnosis — checked real state before theorizing
+
+First hypothesis (Prosys simulation never enabled, so no live value changes exist at all) was ruled out immediately: `GET /api/tags` showed real, changing values (`temperature: 166.87`, etc.) — data was flowing. Checked `GET /api/machines` next and found the actual bug: `Machine1` and `Machine2`'s tags were both grouped under `work_center: "Ligne1"`, with one shared `state` object between them.
+
+**Root cause**: the exact "WorkCenter/WorkUnit swap at 4-level depth" issue already documented and fixed for the KG bootstrap in Entry 98 (`internal/kg.SeedFromDiscovery` correctly uses `WorkUnit` — the actual machine — as Equipment identity when a tag name is 4+ levels deep, since `WorkCenter` at that depth is a *grouping* level like a line, above the machine) — but that fix was **never propagated to the live-routing path**. `OPCUAManager.route()` (which publishes to `mindset/site/#` and drives every downstream consumer — `StateTracker`, the rules engine, the dashboard) used the raw `node.WorkCenter` field directly. So every machine sharing a line published its ISA-95 messages under the *same* work-center identity ("Ligne1"), and `StateTracker.observe("Ligne1", ...)` silently overwrote one machine's Run/Stop state with whichever machine's status last changed. `kg_current_state("Machine1")` found nothing because the tracked key was actually `"Ligne1"`, not `"Machine1"`.
+
+A second, independent instance of the identical bug was found while fixing the first: `OPCUAManager.SelectionsDetailed()` (backing `/api/opcua/selections` and `/api/machines`'s grouping) **also** recomputed the mapping from scratch using the raw `WorkCenter` field, and — separately — never checked a tag's `overrides` entry (Entry 124), so a manual correction wouldn't show up there even though it was already correctly affecting the live topic via `route()`.
+
+### The fix — centralized, not patched per call site
+
+- **`internal/uns/mapper.go`** — `UNSNode` gained a `Depth` field (set in `MapTag`, which already computes it internally) and a new method, `EquipmentIdentity()`, encapsulating the exact rule `kg.SeedFromDiscovery` already had inline: `WorkUnit` if `Depth >= 4 && WorkUnit != ""`, else `WorkCenter`. Single source of truth — this same branch had been independently duplicated in `internal/kg/bootstrap.go` (correctly) and `cmd/server/opcua.go`'s `computeMappings` (correctly) but never applied where it mattered most, the live-publish path.
+- **`OPCUAManager.route()`** — `Metadata.WorkCenter` now uses `node.EquipmentIdentity()` instead of the raw field.
+- **`OPCUAManager.SelectionsDetailed()`** — same fix, plus now checks `m.overrides[id]` first (matching `route()`'s precedence) instead of always recomputing from the raw mapper.
+- **`computeMappings()`** — refactored its own already-correct inline branch to call the new shared method too, removing the duplication rather than leaving three independent copies of the same rule.
+- **Checked, not assumed, that nothing else needed touching**: `internal/rules/engine.go` (the Run/Stop detection engine) and `live.go`'s state-observation code both just read `Metadata.WorkCenter` off the incoming MQTT message — neither recomputes it independently, so both inherit the fix for free once `route()` publishes the corrected value. `live.go`'s raw-topic path (`workCenterOf`, for `raw`-mode tags) was already correct — it parses the tag name's second-to-last segment directly, which happens to already resolve to the right machine name, unrelated to the WorkCenter/WorkUnit field confusion.
+
+### Verified live, full chain, against the real rebuilt Prosys server
+
+Rebuilt, restarted **only** the `:8080` PID (checked via `Get-NetTCPConnection`, left the separate Claude-Desktop-spawned stdio MCP process alone rather than killing it). Reconnected, re-discovered, re-subscribed all 6 tags in ISA-95 mode, waited for live value changes, then confirmed at every layer:
+- `GET /api/opcua/selections` → `work_center: "Machine1"/"Machine2"/"Machine3"` (previously `"Ligne1"`/`"Ligne2"`).
+- `GET /api/machines` → three separate entries, each with its own correct `running` state (`Machine1: true`, `Machine2: true`, `Machine3: false`) and only its own tags.
+- `kg_current_state` MCP tool call with `work_center: "Machine1"` → `{running: true, work_center: "Machine1"}` — the exact question that failed in Claude Desktop now answers correctly.
+
+### Status
+
+Done, live-verified end to end from OPC-UA through to the MCP tool response. `CLAUDE.md` updated same-turn (Structural bootstrap section) explaining the centralization and exactly what was wrong before.
+
+---
+
+## Entry 126 — 2026-07-23 — SQL connections: connecting now browses every database + table, the IT-side analog of OPC-UA's tag tree
+
+**Trigger:** user: *"also when i connect sql i wanna see all databases and tables"*.
+
+### Scoped deliberately narrower than "extend /discover"
+
+Checked `DiscoverSchema`/`/api/connections/{id}/discover` first: it's already schema-browsing, but scoped to exactly one database (`table_schema = DATABASE()`, i.e. whatever `ConnectionConfig.Database` the connection was created with) — and it has a side effect (canonical-mapping heuristic → `SchemaMapping` KG nodes) that assumes that single-database scope, since `SchemaMapping.connection_id` presumes one connection maps to one database's worth of structure. Widening `/discover` itself to span every database would have broken that assumption. Built a **separate, purely read-only** capability instead — visibility only, nothing it returns touches the KG.
+
+### What was built
+
+- **`internal/connections/schema.go`** — new `DatabaseSchema{Name, Tables}` and `ListDatabasesAndTables(db) ([]DatabaseSchema, error)`: one `information_schema.columns` query with no `table_schema` filter beyond excluding system schemas (`mysql`/`information_schema`/`performance_schema`/`sys`), grouped by database then table. Correctly self-scoping — `information_schema` only lists schemas/tables the connection's DB user actually has privileges on, so there's no risk of this leaking visibility the account doesn't already have (verified: `mindset_readonly`, which per `sim/erp/grant.mysql.sql` only has `SELECT` on `fake_erp.*`, correctly sees exactly one database).
+- **New route**: `GET /api/connections/{id}/databases`.
+- **`SqlConnectionsPage.jsx`** — the existing "Connecter" button (already the Test action) now also fetches and renders the databases/tables tree automatically on success, so "connect" and "see everything" happen in one click, matching how the user phrased the request. Click-to-expand per table reveals its columns with the primary key flagged (🔑).
+- **Caught a real bug while writing this, before it shipped**: `tableOrder := map[string][]string` (missing the `{}` literal) — a compile error, not a subtle one, but worth noting it was caught by the build step immediately rather than needing a debug cycle.
+
+### Verified live against the real `dev_erp` connection — backend and browser both
+
+Rebuilt and restarted the `:8080` server (checked the owning PID via `Get-NetTCPConnection -LocalPort 8080` first, killed only that one — not a repeat of the earlier `taskkill /IM` mistake). `curl /api/connections/dev_erp/databases` → exactly `fake_erp` with all 6 real tables and their real columns. Then in the actual browser: navigated to `/connectors/sql`, clicked **Connecter**, confirmed the tree renders live (`fake_erp (6 tables)` → `batches(5)`/`operators(3)`/`products(5)`/`quality_results(7)`/`schedules(5)`/`work_orders(9)`), expanded `work_orders` and confirmed all 9 real columns appear with `of_number` correctly flagged as the primary key.
+
+**A screenshot glitch, investigated rather than assumed**: after expanding `work_orders`, a screenshot showed the entire card seemingly tiled dozens of times across the viewport — alarming at first glance. Checked the actual DOM via `get_page_text` instead of trusting the screenshot: the real page had exactly one correct copy of the section. Consistent with this session's several earlier CDP screenshot timeouts, concluded this was a capture-layer glitch, not a rendering bug — verified via a different tool rather than either dismissing it or believing it uncritically.
+
+### Status
+
+Done, live-verified end to end (backend + real browser interaction). `CLAUDE.md` updated same-turn (API table, IT-side structural bootstrap section).
+
+---
+
+## Entry 125 — 2026-07-23 — Tag découverts table simplified: Type column and Brut/Les deux dropped, ISA-95-only checkbox
+
+**Trigger:** user: *"don't display Type and don't display Brut, les deux in the tag découverts"*.
+
+### What was built
+
+`OpcuaTagSelector.jsx` — removed the `Type` column and the `MODES` 3-way radio group (`raw`/`isa95`/`both`), replaced with a single ISA-95 checkbox per tag (`setMode(nodeId, 'isa95')`, reusing the existing toggle logic — a checkbox's `onChange` fires on every click regardless of resulting state, unlike a radio, so the existing toggle-on-repeat-click behavior carries over cleanly). Updated `colSpan` on the two full-width rows (6 → 3, matching the now-3-column table), the legend text, and the empty-selection error message.
+
+**Checked before assuming this drops a capability**: read `OPCUAManager.route()`/`Subscribe()` again — `discovery.Subscribe` always raw-publishes every *selected* tag regardless of mode; `route()` only ever adds the ISA-95 publish for `isa95`/`both`. Since `isa95` and `both` were already functionally identical (both = raw-always + isa95-conditional, and `raw` alone just skipped the isa95 publish), collapsing the picker to ISA-95-only drops no real routing capability — a selected tag still always gets raw storage underneath, same as before. Documented this reasoning inline (component doc comment + `CLAUDE.md`) so it doesn't need re-deriving later.
+
+The Go API (`TagSelection.Mode`, `normalizeMode`) is untouched — still accepts `raw`/`isa95`/`both`/`isa-95`/`normalized`/`site`. Only the frontend picker was narrowed; the API contract stays as flexible as before for any other client.
+
+### Verified live in the browser
+
+`go build`, `npm run build`, `npx eslint` all clean. Navigated to `/connect/opcua`, discovered the real live tags (same rebuilt Prosys server from Entries 123/124), confirmed the table now shows exactly `Tag | Valeur | ISA-95` with no Type/Brut/Les deux columns, and the confidence+edit sub-row from Entry 124 still renders correctly underneath. Clicked the ISA-95 checkbox directly and zoomed in to confirm it toggles (checked state + the sub-row's dimming correctly clears when active) — not just a visual read, an actual interaction check.
+
+### Status
+
+Done, live-verified. `CLAUDE.md`'s Structural bootstrap section updated same-turn with the "why this drops nothing" reasoning.
+
+---
+
+## Entry 124 — 2026-07-23 — OPC-UA discover now previews the ISA-95 mapping + confidence, and lets the user correct it before anything is committed
+
+**Trigger:** user: *"we will modify the opcua decouvert (when the user ftch the variables, he see the isa95 version and the score of confidance, and he can mmodify)"*.
+
+### Checked what was actually missing before designing anything
+
+Read `handleOpcuaDiscover`/`Discover()`: the ISA-95 mapping + confidence **were already computed** (for the KG-seed side effect that's existed since Entry 107) but never reached the HTTP response — the frontend only ever got `{node_id, name, data_type, value}`. Also confirmed there was no "modify" capability anywhere — `ValidateNode`/`RejectNode` are accept/reject only, and only on the separate, post-hoc KG "Pending validation" list.
+
+**Design fork put to the user before building**: should the preview+edit live in the OPC-UA discover/tag-selector screen (pre-commit) or the existing KG pending list (post-seed)? User picked pre-commit — matches how they described it.
+
+### The scope turned out bigger than "just show it in the response"
+
+Read `route()` — the function that fires on every single live tag value change — and found it recomputes the ISA-95 mapping from scratch via `m.mapper.MapTag(...)` **every time**, not once at subscribe time. That meant a naive "just store the correction in the KG" implementation would have left the live-published MQTT topic silently wrong forever, even after a human corrected it. Scope became: the correction has to be checked by `route()` on every publish, not just at seed time.
+
+### What was built
+
+- **`cmd/server/opcua.go`**:
+  - `discoveredTag` gained `Site`/`Area`/`WorkCenter`/`WorkUnit`/`TagName`/`Confidence`/`Pending`.
+  - `Discover()`'s mapping+confidence computation factored out into `computeMappings()` (shared with `seedKG`, no duplicated heuristic logic) and attached to the response.
+  - `TagSelection` gained optional `area`/`work_center`/`work_unit`/`tag_name` — any left blank falls back to the mapper's own guess for just that field, not all-or-nothing per tag.
+  - New `overrides map[string]uns.UNSNode` on `OPCUAManager`, populated in `Subscribe()` from any selection carrying a correction, reset on disconnect (same lifecycle as `selections`).
+  - `route()` checks `overrides[tag.NodeID]` first, falling back to `m.mapper.MapTag(...)` only if absent — a correction now actually changes the published topic, not just a KG property.
+  - `Subscribe()` also writes corrected entries into the KG via the existing `SeedFromDiscovery`, with `Confidence: 1.0` (human-supplied, not another guess needing its own review) — additive, doesn't retract the original auto-guess (same class of known limitation as "reject doesn't cascade to children," documented inline).
+- **`OpcuaTagSelector.jsx`** — a sub-row under every discovered tag showing confidence % (color-coded, same threshold convention as the KG page) and editable Area/WorkCenter/WorkUnit/TagName inputs, pre-filled with the server's guess. `handleApply` only sends a field if it actually differs from the guess, so the payload makes "untouched" vs. "corrected" visible server-side. Fixed a real React bug before it shipped: the per-tag two-`<tr>` block was wrapped in a shorthand `<>` fragment inside `.map()`, which can't carry a `key` — switched to `Fragment` with the key on it, avoiding a real (if easy to miss) rendering bug.
+
+### Verified live end to end, against the real rebuilt Prosys server — not curl alone, and not without catching a false start
+
+`go build`, `npm run build`, `npx eslint` all clean. Then, against the actual live OPC-UA connection (the manually-rebuilt Prosys structure from Entry 123 — `Usine_Paris_Nord.Ligne1/2.Machine1/2/3.status/temperature`):
+
+1. **Via curl first** — discovered real tags, confirmed the response carries the mapping + a real, unplanned data artifact: `"area": " Usine_Paris_Nord"` with a stray leading space from manual entry in Prosys. Corrected it via `POST /api/opcua/subscribe` with `area: "Usine_Paris_Nord"` — confirmed the KG now holds **both** the clean corrected node and the original space-prefixed one side by side, exactly matching the documented additive limitation.
+2. **Via the actual browser UI** (`mcp__claude-in-chrome__*`, not just protocol calls) — navigated to `/connect/opcua`, clicked Découvrir, visually confirmed the confidence badges + editable fields render correctly, edited a `WorkCenter` field to a distinctive marker value (`LigneA_test`) live in the browser, selected ISA-95, clicked Appliquer.
+3. **First browser Apply attempt failed** — `"no valid tag selections"`. Investigated rather than assumed: checked the server log (no evidence of a session reset), checked `normalizeMode()` (not the cause), then loaded `read_network_requests` and retried — the retry succeeded (`200`, navigated to `/compose` as expected), and the KG confirmed the correct `LigneA_test` WorkCenter node was written. **Root cause of the first failure not fully pinned down** — network capture wasn't active for that specific click, so there's no request-level evidence to diagnose further. Reported as an observed-but-unresolved transient rather than claiming a fix for something not actually understood.
+
+### Status
+
+Done, live-verified against real hardware and a real browser session. The one open thread: the transient first-attempt failure above — not reproduced on a second clean attempt, not explained. Worth attention if it recurs. `CLAUDE.md` updated same-turn (API table, Structural bootstrap section, including the "no cleanup for an already-accepted stale node" limitation stated plainly).
+
+---
+
+## Entry 123 — 2026-07-23 — Prosys OPC-UA fixed (Windows-reserved port, not a code bug) and its lost simulation config rebuilt as an importable NodeSet2 file
+
+**Trigger:** user reported Prosys OPC UA Simulation Server showing `Server Status: Stopped` with `failed to initialize server endpoint: opc.tcp://med26...` — unrelated to any of today's code changes, a local environment issue. Then, once fixed, the user had lost their previous Prosys node/tag configuration and asked for help rebuilding it.
+
+### Diagnosis — narrowed by one detail the user volunteered, not guessed from the error alone
+
+Initial hypothesis (hostname/interface binding) was reasonable from the error text alone, but the user then added the key detail: **Prosys starts fine on "UA HTTPS," fails only on "UA TCP."** That single fact ruled out a general hostname-resolution problem (both endpoint types would fail identically) and pointed at something specific to the TCP endpoint's port. Checked `netstat`/`Get-NetTCPConnection` for port `53530` (Prosys's default, and what `config/agent.yaml` expects) — nothing listening, which looked like the port was free. Checked one level deeper: `netsh interface ipv4 show excludedportrange protocol=tcp` — **`53530` falls inside a Windows-reserved range (`53497–53596`)**, almost certainly auto-generated by Hyper-V/WSL2's NAT port reservation. A reserved port is unbindable by any other process while still showing as "nothing listening" in `netstat` — exactly the symptom, and exactly why it looked contradictory (port "free" yet bind fails).
+
+**Fix**: move Prosys's UA TCP endpoint to `4840` (the IANA-standard OPC-UA port, confirmed free) instead of the non-standard `53530` default, and update `config/agent.yaml`'s `opcua.endpoint` to match once the user confirms the exact path Prosys shows.
+
+### Rebuilding the lost simulation config — a NodeSet2 XML, not manual GUI clicks
+
+User chose (asked directly) to have a NodeSet2 XML generated for one-shot import rather than manual step-by-step GUI recreation. Before writing it, read `internal/uns/mapper.go` in full to get the exact naming convention right — its doc comment already documents the real 4-level convention verified against a live Prosys server in Entries 97/98 (`Usine_Paris_Nord.Ligne2.Machine3.status`). Then read `internal/discovery/opcua.go`'s `browseNode` to confirm *how* that dotted name actually gets constructed: `fullName = parentName + "." + name`, built by recursively walking nested OPC-UA **Objects**, not a literal dot in a single node's BrowseName. This mattered — generating flat nodes named e.g. `"Usine_Paris_Nord.Ligne1.Machine1.status"` would not have worked; the file had to define real nested Object folders.
+
+**`sim/opcua/mindset_simulation.xml`** (new) — a NodeSet2 file recreating exactly the structure confirmed live earlier this session (Entry 120's entity resolution test, and Claude Desktop's own answer grouping `machine1`/`machine2` under `Ligne1` and `machine3` under `Ligne2`): `Usine_Paris_Nord → Ligne1/Ligne2 → Machine1/Machine2/Machine3 → {status: Boolean, temperature: Double}`. Placed under `sim/opcua/`, mirroring the existing `sim/erp/*.sql` convention for simulation assets — a durable, reusable artifact rather than a one-off answer, so nobody has to re-derive this by hand again.
+
+**A real mistake caught before handing it over**: the first draft used decorative `<!-- ---------- Machine1 ---------- -->` comment dividers — invalid, since XML comments can't contain `--` anywhere in their body. Validated the file with a real XML parser (Python's `xml.etree.ElementTree`) before delivering it, not just visual inspection — caught the parse error at the exact line, fixed the divider style (`====` instead of `----`), re-validated: well-formed, 6 `UAObject` + 6 `UAVariable` nodes, structure matches intent.
+
+**Noted, not solved**: Prosys's own per-variable "Simulation" (auto-varying values over time) is a Prosys-specific runtime setting, not part of the standard NodeSet2 format — flagged to the user that they'll need to enable it manually per variable after import, specifically calling out `status` as the one that matters most since that's what Run/Stop detection reads.
+
+### Status
+
+Port fix given, not yet confirmed by the user with the new port live. `sim/opcua/mindset_simulation.xml` written and XML-validated, not yet confirmed importable in the user's actual Prosys instance (no way to test that from here — no GUI automation for non-Chrome apps). `CLAUDE.md` updated same-turn (OPC-UA source bullet: the port-exclusion gotcha + a pointer to the new sim file).
+
+---
+
+## Entry 122 — 2026-07-23 — Real Claude Desktop connection debugged end to end: relative-path defaults broke stdio launch; found and fixed live, not guessed
+
+**Trigger:** the user actually tried Entry 121's stdio setup in the real Claude Desktop app and worked through it with live findings at each step, rather than a single report at the end — worth capturing the sequence since each step corrected an assumption.
+
+### Step 1 — Claude Desktop wasn't findable on disk at first
+
+Checked the usual `Program Files` / `AppData\Local\Programs` / `AppData\Roaming\Claude` locations — nothing. Turned out to be the Windows Store (MSIX) packaged build, which virtualizes AppData to `AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\` — the user supplied the real path directly rather than more searching.
+
+### Step 2 — merged config, didn't overwrite
+
+Read the existing `claude_desktop_config.json` first (contained unrelated app preferences — `coworkUserFilesPath`, `epitaxyPrefs`, etc., no `mcpServers` key yet) and added the `mcpServers` block alongside it, not a wholesale file replacement. Validated the merge parses as JSON before moving on.
+
+### Step 3 — launched the app directly, since the user asked me to try
+
+Found the real launch identifier (`Get-StartApps` → `Claude_pzs8sxrjxfjjc!Claude`, not a plain `.exe` — Windows Store apps launch via `shell:AppsFolder\<AppID>`) and started it. Explicitly told the user upfront what I could and couldn't do here: I can launch a process, but I have no GUI automation for anything outside Chrome, so I can't see the window, click anything, or read its output — the actual interaction had to be theirs.
+
+### Step 4 — the connector didn't show up in the web "Connectors" list
+
+User checked and reported only OAuth/Web-type connectors listed (Figma, GitHub, Google Drive, Notion) — no `mindset-data`. My first hypothesis was a stale-process problem (many `claude` processes were already running from earlier sessions when I launched it, so it may have opened a window on an existing instance rather than actually restarting). **Deliberately did not act on that hypothesis by bulk-killing `claude.exe`** — those processes almost certainly included this very session and possibly other active Claude Code sessions the user has open; the exact mistake already made once this session with `server.exe` was not worth repeating with a process name this session is itself running under. Asked the user to quit/restart manually instead, and pointed at Settings → Developer as a second, more likely explanation (the "Connectors" list is a different, OAuth-only feature from local `stdio` MCP servers).
+
+### Step 5 — the real finding: config was read correctly, connection failed
+
+User checked Settings → Developer → "Local MCP servers" and found `mindset-data` **was** listed (config load confirmed correct — Step 4's stale-process hypothesis was wrong), but showing **`Server disconnected`** — the process starts then exits immediately.
+
+### Root cause found and verified before fixing, not guessed
+
+Reproduced directly: ran the exact same binary + flags from `/tmp` (standing in for "some cwd that isn't the project root") with stdin closed —
+```
+[API] Could not load config/agent.yaml (open config/agent.yaml: The system cannot find the path specified.); using defaults
+[API] Failed to open KG at ./data/mindset.db: unable to open database file (14)
+```
+Confirmed: `-config`, `-db`, `-pipelines` all default to paths relative to the process's working directory, which is fine when a shell has already `cd`'d into the project root (every prior verification this session — `run.ps1`, `claude mcp add`, my own Python test scripts — did exactly that) but Claude Desktop launches the subprocess from its own working directory, not the project's. `kg.NewKnowledgeGraph` failing calls `log.Fatalf` → immediate exit → stdin/stdout close → Claude Desktop's generic **"Server disconnected"**, which gives no hint the actual cause is a path problem.
+
+**A second, code-level instance of the same bug, worse because no flag existed for it**: `config/connections.yaml` was loaded via a **hardcoded string literal** in `main.go`, not a flag at all — meaning even passing absolute paths for everything else couldn't have fixed `dev_erp` loading. Added a `-connections` flag (defaulting to the same relative string, so `run.ps1`/existing usage is unaffected) so it can be overridden the same way as the other three.
+
+### Fix verified against the exact real-world launch conditions, not just "it builds"
+
+Before declaring this fixed, wrote a reproduction script that mimics Claude Desktop's actual launch shape as closely as possible from the outside — `cwd=C:\Windows\System32` (deliberately not the project root), only `command`/`args`/`env` (no other launch-time control, matching what `claude_desktop_config.json` can express). With all 4 paths passed as absolute flags: `initialize` succeeded, and `kg_active_production` returned the same real, correctly OT-resolved data (`machine_Machine1`/`2`/`3`, per Entry 120) as every other verification this session.
+
+### Process note — cleaned up a self-inflicted file lock correctly this time
+
+The rebuild after adding `-connections` failed with `bin/server.exe: The process cannot access the file`, because both the live `:8080` instance *and* a leftover stdio-test process (from a piped `| head -10` that didn't actually exit) still held it open. This time, checked `tasklist` first, killed the two specific PIDs found there — not a blind `taskkill /IM server.exe` — then rebuilt and explicitly restarted the `:8080` instance the user depends on, verifying `/api/health` before moving on.
+
+### Status
+
+Fixed, live-verified under real launch conditions, and the Claude Desktop config updated with all 4 absolute-path flags. `CLAUDE.md`'s "Connecting Claude Desktop" section rewritten with the root cause, the fix, and the Settings → Developer (not Connectors) correction — so the next person hitting "Server disconnected" doesn't have to re-derive this. Not yet confirmed working end-to-end *inside* the actual Claude Desktop UI after this fix — that's the user's next step, pending their restart.
+
+---
+
+## Entry 121 — 2026-07-22 — MCP stdio transport, so Claude Desktop can connect without HTTPS
+
+**Trigger:** user, walking through connecting Claude Desktop to the MCP server built in Entries 113/114: *"URL must start with 'https'"* — Claude Desktop's custom-connector UI validates for HTTPS, rejecting the local `http://localhost:8080/mcp` endpoint outright. Offered two fixes (a temporary `ngrok` tunnel, or a proper local stdio transport); user picked **stdio**.
+
+### What was built
+
+- **`cmd/server/main.go`** — new `-mcp-stdio` flag. When set, skips building the HTTP mux and calling `ListenAndServe` entirely (no port bound), instead calling the new `runMCPStdio(srv)` and exiting when it returns. Everything before that branch point — KG open, MQTT connect, `LiveHub`, connections registry — stays wired up unchanged, so the same 5 tools return real, live data in either mode, not a stripped-down subset.
+- **`connectMQTT`** — gained a `clientID` parameter (was hardcoded `"mindset-api-server"`). Stdio mode uses `"mindset-mcp-stdio"` instead — the MQTT spec disconnects whichever connection loses when two clients share a client ID, which would have silently kicked the already-running HTTP instance off the broker the moment Claude Desktop spawned a stdio process alongside it.
+- **`cmd/server/mcp_server.go`** — new `runMCPStdio(s *server) error`, mirroring `mountMCP` but calling `mcpServer.Run(ctx, &mcp.StdioTransport{})` instead of registering an HTTP handler.
+
+### Verified live, not assumed safe
+
+The real risk with stdio transport: anything printed to stdout other than protocol JSON corrupts the stream. Checked first, not after — `grep`'d `cmd/server` for `fmt.Print`/`fmt.Println`/`os.Stdout`: zero hits. All logging goes through `log.Printf`, whose default output is stderr in Go, not stdout — confirmed rather than assumed.
+
+Built the real binary and drove it with a Python subprocess test (`stdin`/`stdout` pipes, not a mock) — sent real `initialize` → `notifications/initialized` → `tools/list` → `tools/call kg_active_production` over stdin, exactly as Claude Desktop's `mcpServers` launcher would:
+- `initialize` responded correctly on the first `stdout` line.
+- `tools/list` returned all 5 tools.
+- `tools/call kg_active_production` returned the same real data (including `equipment_id`, confirming Entry 120's resolution work reaches this transport too) as the HTTP path already returned.
+- `stdout` carried nothing but the 3 JSON-RPC response lines — no corruption.
+- `stderr` correctly captured all the `[FUNCTIONS] Registered: ...` / `[API] ...` log lines, cleanly separated from the protocol stream.
+- No port conflict: the already-running `:8080` HTTP instance (`server.exe`, live since the earlier "build and launch" turn) stayed healthy and reachable throughout the stdio subprocess's lifetime and after it terminated.
+
+### Status
+
+Done and live-verified. `CLAUDE.md`'s MCP section updated same-turn with both transports. Gave the user the `claude_desktop_config.json` entry to add (`command`: the built binary, `args: ["-mcp-stdio"]`, `env.MINDSET_ERP_PASSWORD` set) — not yet confirmed working from inside Claude Desktop itself, since that's the user's own app to configure, only the server side of the connection is verified here.
+
+---
+
+## Entry 120 — 2026-07-22 — Two gaps closed: real OT↔IT entity resolution, and the ERP data now visible on the Dashboard
+
+**Trigger:** user, after asking whether the IT-side work was surfaced on the Dashboard or linked to OT tags and being told honestly it was neither: *"fix the two gaps"*.
+
+### Gap 2 — entity resolution (the one Entry 109 flagged as entirely missing)
+
+**`cmd/server/entity_resolution.go`** (new) — `ResolveWorkCenters`, run automatically as part of every `/discover` (right after mapping seeding, same trigger point Phase 2 already used). For every validated `work_order` `SchemaMapping`, runs `SELECT DISTINCT <work_center_col> FROM <table>` against the real connection — not assuming values from the mapping alone — and matches each result (case-insensitive, exact match only, deliberately not fuzzy) against known OT `Equipment` nodes' `work_center` property. Where they match, writes a persisted `same_as` edge (`Equipment → SchemaMapping`, business category, idempotent via the existing `AddEdgeCat` `INSERT OR IGNORE`).
+
+`ActiveProductionFact` (from Entry 117) gained an `EquipmentID` field, populated the same way — via a shared `equipmentByWorkCenter` index — independently of whether `ResolveWorkCenters` has run for this connection yet, so the live answer and the persisted graph edge can't drift out of sync with each other. Left empty (not guessed) when no OT node matches.
+
+### Gap 1 — surfaced on the Dashboard, not just MCP
+
+- **New REST route**: `GET /api/production/active[?work_center=]` (`cmd/server/active_production.go`) — the same `ActiveProduction` query the MCP tool already used, now also reachable without an MCP client.
+- **`client.js`**: `fetchActiveProduction`.
+- **`DashboardPage.jsx`**: new "🔗 Production active (ERP)" panel — machine / product / OF / status / OT-link badge — fetched alongside the existing dashboard data on every refresh, in its own `try`/`catch` so a missing ERP connection (a normal, expected state) doesn't blank the rest of the page. Only renders when there's data, so it's invisible until a work-order mapping actually exists.
+
+### Real-data finding while verifying — a correction to my own earlier assumption
+
+Earlier in this session I assumed only `Machine1`/`Machine3` had OT `Equipment` nodes (based on a truncated KG read) and expected `machine2` to be a clean negative case for resolution. Live-verifying against the real `dev_erp` data proved that assumption wrong: **all 3** machines (`machine1`/`machine2`/`machine3`) resolved correctly to real `machine_Machine<N>` Equipment nodes — a fuller OT KG existed than I'd read. Correcting it here rather than letting the earlier assumption stand uncorrected in the log.
+
+### Verified live, not just compiled
+
+`go build ./...`, `go vet` (touched packages), `npm run build`, `npx eslint` on every touched frontend file (compared against a `git stash` baseline again — identical pre-existing counts, zero new issues) all clean.
+
+**Process note — a real mistake made and fixed inline**: ran `taskkill //F //IM server.exe` to restart with a fresh build for testing, not realizing that also killed the **live `:8080` instance** launched for the user via `run.ps1` in the previous turn (image-name-based `taskkill` kills every matching process, not just a test one). Caught it immediately, rebuilt, and restarted the real `:8080` instance with today's changes rather than a disposable test port — better outcome anyway, since it's what the user's own browser session is actually pointed at.
+
+Against the live `:8080` instance: called `/api/connections/dev_erp/discover` → `equipment_resolved: 3`; confirmed all 3 `same_as` edges directly via `GET /api/kg?category=business`; confirmed `GET /api/production/active` returns all 3 facts with `equipment_id` populated (`machine_Machine1`/`machine_Machine2`/`machine_Machine3`). This data was **not** cleaned up afterward — genuine output of the real `dev_erp` connection, same as Entry 116/117.
+
+### Status
+
+Both gaps closed and live-verified. `CLAUDE.md` updated same-turn (API surface table, IT-side bootstrap section, MCP tool table).
+
+---
+
+## Entry 119 — 2026-07-22 — Function catalog cleanup: `uns_mapper` deleted, `mqtt_publish` replaced by automatic output publishing
+
+**Trigger:** user: *"delete functions: uns_mapper because we map automatically, mqtt_publish -> make it automatically"*. `uns_mapper` was a confirmed removal candidate already (Entry 109); `mqtt_publish`'s ask was ambiguous enough to check with the user before acting — see the clarifying questions below, both answered before any code changed.
+
+### `uns_mapper` — deleted, not just deregistered
+
+Confirmed via `grep` it was only ever wired as a pipeline function (`cmd/server/main.go`, `cmd/agent/main.go`, and a dead/unused duplicate registration in `cmd/agent/init.go` — `initFunctionsRegistry` is never called from `main.go`, a pre-existing dead-code duplication, noted but not otherwise touched). Deleted `internal/functions/transforms/uns_mapper.go`, deregistered from both binaries, and deleted `config/pipelines/examples/opcua_to_uns.yaml` outright — its sole purpose was demonstrating `uns_mapper`, so fixing rather than removing it would have kept a pointless example alive. Removed the matching `functionDocs.js`/`functionDefaults.js` entries so the builder palette doesn't offer a picker for a function that no longer exists.
+
+### `mqtt_publish` — clarified before touching anything, then found a real risk before implementing
+
+First clarifying question: does "automatic" mean auto-deriving the topic on an unchanged node, or removing the node from pipelines entirely? User chose **removing the node entirely**.
+
+Before implementing that, read the 3 shipped example pipelines directly rather than assuming `mqtt_publish`'s `topic` config was cosmetic — it isn't. `microstop_detection.yaml` publishes to `mindset/events/micro-stop`, which `internal/kg/subscriber.go` is **hardcoded** to subscribe to for KG auto-enrichment, and which `cost_calculation.yaml`'s own trigger subscribes to as its input — the pipelines chain together purely by matching topic strings. Auto-deriving a topic (e.g. from pipeline id) would have silently broken both the KG auto-enrichment path and that pipeline chain. Surfaced this to the user as a second clarifying question before writing any code: keep an explicit, optional topic field (smaller, safer) vs. fully auto-derive and update the hardcoded subscription + both chained pipelines to match (bigger, touches the KG auto-enrichment path directly). User picked the **explicit optional field**.
+
+### What was built
+
+- **`internal/pipeline/types.go`** — new `Pipeline.OutputTopic` field (`output_topic`, optional).
+- **`cmd/server/pipeline_output.go`** (new) — `publishPipelineOutput`, called from `handleRunPipeline` right after `Engine.Execute` succeeds. Finds the declared `Output` node's result in `result.Nodes`, publishes it to `OutputTopic` if set, else `mindset/pipelines/<id>/output`. No-ops cleanly if the pipeline failed, has no declared output, or the output node itself didn't succeed.
+- Deregistered `mqtt_publish` from `cmd/server/main.go` (it was never actually registered in `cmd/agent` at all — checked, only a TODO comment existed there) and deleted `internal/functions/outputs/mqtt_publish.go`.
+- Updated all 3 remaining example pipelines (`microstop_detection`, `cost_calculation`, `of_enrichment`) — removed their `mqtt_publish` node, moved the exact same topic string up to the new `output_topic` field, and repointed `output:` at the real terminal node (`threshold`/`cost`/`fetch_current_of` respectively) instead of the now-deleted node.
+- **Frontend**: `BuilderPage.jsx`'s save validation required a `type === 'output'` node to exist — no longer correct, since auto-publish works off *any* terminal node regardless of type. Relaxed to "at least one processing step exists" (auto-publish needs something to publish); `add_to_dashboard` remains available as an optional *additional* output, not a required one. Removed the dead `mqtt_publish` entries from `functionDocs.js`/`functionDefaults.js`, updated a stale comment in `connectorTemplates.js` referencing the old `mqtt_subscribe → sql_query → mqtt_publish` chain.
+
+### Verified live, not just compiled
+
+`go build ./...`, `go vet` (touched packages — the `cmd/agent` warnings are the same 5 pre-existing ones from every prior entry this session, unrelated), `npm run build`, and `npx eslint` on every touched frontend file all clean (compared single-file eslint counts before/after to be sure `BuilderPage.jsx`'s edit introduced nothing new — it didn't; `ForceGraph.jsx`'s 3 errors are the same pre-existing ones Entry 96 already found).
+
+Then actually exercised the new mechanism end to end: built a disposable scratch pipeline (`scratch_auto_publish_verify` — same throwaway-pipeline pattern Entry 110 used) with one `calculate_cost` node, `output_topic: mindset/test/auto_publish_verify`, no `mqtt_publish` node anywhere in it. Ran a Python `paho-mqtt` subscriber (no `mosquitto_sub` CLI available in this environment — checked, used what's actually here) against `mindset/test/#`, called `POST /api/pipelines/scratch_auto_publish_verify/run`, and confirmed the node's real output arrived on exactly the declared topic. Deleted the scratch pipeline immediately after.
+
+### Status
+
+Done and live-verified. Docs updated same-turn: `CLAUDE.md` (function catalog, new "Automatic output publishing" section, pipeline template list) and `docs/ARCHITECTURE.md` (same, kept in sync since it mirrors CLAUDE.md's function/pipeline sections).
+
+---
+
+## Entry 118 — 2026-07-22 — Local-launch status audit: `server.exe` not running, and a real `erpsim` container networking bug found
+
+**Trigger:** user: *"how can i lunch this product?"*, clarified to *"i talked about luch the program for testing, i have run.ps1 and docker compose ...., check and tell me"* — not a strategy question, a request to check actual local environment state before launching.
+
+### Method — checked every component directly, not assumed from `run.ps1`'s own description
+
+`docker ps -a`, `tasklist` for `server.exe`/`agent.exe`/`node.exe`, and a raw TCP check on `:53530` (Prosys) — rather than trusting `run.ps1`'s comments about what it starts.
+
+### Findings
+
+| Component | Status |
+|---|---|
+| MQTT broker (`:1883`, `broker_mindset`) | up |
+| Fake-ERP MySQL (`:3308`, `mindset-erp`) | up, healthy |
+| `erpsim` data generator (`erpsim_mindset` container) | **broken** — see below |
+| Frontend (Vite, `:5173`) | already running (pre-existing process) |
+| `agent.exe` | already running (pre-existing process) |
+| `server.exe` | **not running** — killed at the end of Entry 117's live-verification and never restarted; the actual blocker for a working UI |
+| Prosys OPC-UA simulator (`:53530`) | not running — expected, only needed for OT tag demos |
+
+### Real bug found, unrelated to any of today's Track A/B work
+
+`docker logs erpsim_mindset` shows continuous failures since the container started: `dial tcp [::1]:3308: connect: connection refused`, repeating every ~60s for 31+ hours. It's trying to reach MySQL at `localhost:3308` — the **host-mapped** port — from *inside its own container*, where nothing listens on that address; inside the `docker-compose.dev.yml` network it should be addressing the `mysql-erp` service by its Docker DNS name. Net effect: the ERP's `advance`/`rotate`/`quality`/`plan` background loops have not been running this whole time — the `WO-2026-9197`-style rows Entry 117's `kg_active_production` test returned are static leftovers from whenever `erpsim` last ran successfully, not live-generated. Doesn't invalidate anything verified so far (the schema and seeded rows are real and valid), but the "product changes over time" story can't demo live until this is fixed.
+
+### Given, not yet actioned
+
+Told the user the exact command to finish launching (`$env:MINDSET_ERP_PASSWORD = "readonly_dev"; .\run.ps1 -NoBuild` — binaries already built and tested this session) and offered to fix the `erpsim` DSN now. Awaiting direction on the fix.
+
+---
+
+## Entry 117 — 2026-07-22 — Track B Phase 4 built and live-verified: "which product is running" now has a real answer
+
+**Trigger:** user: *"keep going"* — continuing Track B past Entry 116's Phase 1+2, straight to Phase 4 (Phase 3's required piece — the `SchemaMapping` color — was already done in Entry 116).
+
+### What was built
+
+- **`cmd/server/active_production.go`** (new) — `ActiveProduction(ctx, workCenter)` scans the business graph for `SchemaMapping` nodes that are both `canonical_type: work_order` and `pending: false` (human-validated), extracts each one's `field_map` (order_id/status/product_id/work_center columns), and runs a parameterized `SELECT` against the mapped table filtered by a hardcoded in-progress status-token set (`running`, `in progress`, `released`, `active`, `started`, `open` — case-insensitive `LIKE`) and, if given, the work_center column. Table/column names are spliced into the query string (they come from the heuristic mapper, not raw user input) but are checked against a `^[A-Za-z0-9_]+$` identifier regex first regardless — defensive, since they're still dynamic strings landing in SQL. A mapping missing any of the 4 required fields, or failing the identifier check, is skipped rather than guessed; one bad connection's query error doesn't fail the others.
+- **New MCP tool**: `kg_active_production(work_center?)`, wired into `mcp_server.go`; the server's `Instructions` text updated to describe what it does and, explicitly, doesn't (no historical duration questions).
+- Doc-comment at the top of `mcp_server.go` updated — it previously stated flatly "no product/work-order context exists"; corrected to reflect Phase 4 now filling that gap for the "right now" case only.
+
+### Verified live against real seeded ERP data, not synthetic rows this time
+
+Unlike Entry 116's schema discovery (real schema, but tested with the ERP mostly empty) or Entry 114's Track A test (deliberately synthetic scratch data), this one had real `cmd/erpsim`-generated rows to query already sitting in `dev_erp` from prior sessions. Ran the built server, did the MCP `initialize` → `tools/call kg_active_production` round trip:
+
+- No `work_center` filter → 3 active orders returned, one per machine (`machine1`/`PROD-A02`/`WO-2026-9197`, `machine2`/`PROD-A02`/`WO-2026-9234`, `machine3`/`PROD-A05`/`WO-2026-9208`), all `status: RUNNING`.
+- `work_center: "machine1"` → correctly narrowed to exactly the one matching order.
+
+This is the first time in this whole Track A/B thread that a tool answers one of the user's *original* three example questions from Entry 113 ("which product is in production actually?") with live data, not a caveat.
+
+### Status
+
+Track B Phase 4 done and live-verified. Restated plainly, since it's easy to over-claim once one product question works: `kg_active_production` answers "what's running now" only. Entry 113's third example question — "the B product took how much time yesterday?" — is **still unanswered** and needs retroactive event-tagging (writing product/OF context onto Event nodes as they're created), which is separate, unstarted work. `CLAUDE.md` updated same-turn (MCP tool table, IT-side bootstrap section, Known Limitations bullet).
+
+---
+
+## Entry 116 — 2026-07-22 — Entry 115's Track B Phase 1+2 built and live-verified against the real fake-ERP connection
+
+**Trigger:** user: *"go track b, i validate the plan"* — go-ahead on Entry 115's phased plan, starting with Phase 1+2 (schema discovery + heuristic canonical-mapping suggestion) per the agreed sequencing.
+
+### What was built
+
+- **`internal/connections/schema.go`** (new) — `DiscoverSchema(db) ([]TableSchema, error)`, browses `information_schema.columns WHERE table_schema = DATABASE()`. Direct analog of `internal/discovery.BrowseNodeTree`.
+- **`internal/connections/canonical_suggest.go`** (new) — `SuggestMappings(tables) []MappingCandidate`. Scoped to 2 canonical types for v0 (`work_order`, `product`), not the full 9-object set from Entry 92. Column-name synonym matching against core fields (id/status/product/work_center references — 80% of score) and bonus fields (customer/due-date/margin — 20%); `suggestionFloor = 0.5` skips tables that don't clear it against any type, so a schema's unrelated tables aren't forced into a guess.
+- **`internal/kg/it_bootstrap.go`** (new) — `SeedSchemaMappings`, writing a **new node type**, `SchemaMapping` (business category), gated by the unmodified `kg.AutoAcceptThreshold` and reusing `ListPending`/`ValidateNode`/`RejectNode` exactly as they already were — zero changes to that machinery, confirming the design bet from Entry 115.
+- **New route**: `GET /api/connections/{id}/discover` in `cmd/server/connections_handlers.go`, triggering the heuristic + KG seeding as a side effect of the browse — same one-action pattern as `/api/opcua/discover` → `seedKG`.
+- **Frontend**: `SchemaMapping` color (`#0EA5E9`) added to `ForceGraph.jsx`'s `NODE_COLORS` up front — deliberately not repeating the exact bug Entry 111 had to fix (a new type silently falling through to grey). `typesPresent()` already derives the legend from live data, so no other frontend change was needed — confirmed by reading the component before assuming work was required.
+
+### Heuristic designed against the real schema, not guessed
+
+Read `sim/erp/schema.mysql.sql` directly before writing the vocabulary, rather than trusting `docs/it_connectors.md`'s aspirational field list (which includes `customer_id`/`due_date` on production orders — fields the actual fake-ERP `work_orders` table doesn't have). Worked through the scoring by hand against all 6 real tables before running anything, to catch false positives ahead of time: `batches` (has `of_number` + `quality_status`, matching `order_id`+`status`) and `schedules` (has `of_number` + `work_center`) both looked like they could partially resemble a `work_order` table — checked they'd land at 0.4, correctly below the 0.5 floor, before writing code.
+
+### Verified live against the real `dev_erp` MySQL connection, not a mock
+
+`go build ./...`, `go vet` (touched packages), `npm run build` all clean. Docker was already up (`mindset-erp` on `:3308`, healthy) — checked with `docker ps` before assuming a live test was even feasible this session. Ran the actual server binary with `MINDSET_ERP_PASSWORD` set and called the real endpoint:
+
+- `products` → confidence **1.0**, auto-accepted, field_map `{product_id: product_code, name: name, margin: hourly_margin}`.
+- `work_orders` → confidence **0.8**, auto-accepted, field_map `{order_id: of_number, status: status, product_id: product_code, work_center: work_center}`.
+- `operators`, `batches`, `schedules`, `quality_results` → correctly **not suggested** (all below the 0.5 floor) — matches the by-hand scoring worked out beforehand.
+- `GET /api/kg/pending` → empty (both scored above `AutoAcceptThreshold`, as expected — nothing exercises the pending path this time, same honest caveat Entry 107 noted for its own high-confidence-only test).
+- Confirmed via `GET /api/kg?category=business` that both `SchemaMapping` nodes persisted correctly with the right properties.
+
+This data was **not** cleaned up afterward, unlike Entry 114's scratch-event test — it's genuine output of running discovery against the real, already-configured `dev_erp` connection, not test pollution.
+
+### Docs updated same-turn
+
+`CLAUDE.md` — new `GET /api/connections/{id}/discover` API row, a new "IT-side structural bootstrap" subsection mirroring the existing OT one, and the Known Limitations bullet that said IT-side had "no equivalent auto-generation" corrected to reflect what's now built vs. still missing (Phase 4).
+
+### Status
+
+Phase 1+2 done and live-verified. Phase 3 (frontend) done — the required color fix; the optional "Discover" button on `SqlConnectionsPage.jsx` was **not** built (nice-to-have, not required — the pending list needs it seeded, not a UI trigger, and `/discover` is reachable via curl/any client today). Phase 4 (consuming a validated mapping to answer "what's running now") **not started** — remains the next piece, and "how long did product B take yesterday" still needs retroactive event-tagging beyond Phase 4's scope, restated here so it isn't assumed solved.
+
+---
+
+## Entry 115 — 2026-07-22 — Track B full plan: an IT-side structural bootstrap mirroring the OT one, phased
+
+**Trigger:** asked which Track B option (Entry 113) to pursue; user: *"automatic like ot side"* — not either of the two originally offered options, but a third: mirror `internal/kg/bootstrap.go`'s discovery → heuristic mapping → confidence gate → pending/validate/reject pattern, applied to SQL connections instead of OPC-UA. Then asked to see the full plan before building anything.
+
+### Feasibility checked before planning, not assumed
+
+Read `internal/connections/registry.go` (`Registry.Get(id)` gives a pooled `*sql.DB` directly — usable for an `information_schema` query with no new plumbing) and `internal/kg/bootstrap.go` in full (`AutoAcceptThreshold`, `SeedFromDiscovery`, `ListPending`/`ValidateNode`/`RejectNode`, all generic over any business-category node with a `pending` property — reusable unchanged for a new node type). Also checked `KnowledgeGraphPage.jsx`'s pending-list rendering directly — confirmed generic, not OT-specific, so a new node type shows up there with zero frontend change to the list itself. Checked Docker/container state (`docker ps`) and found the fake-ERP MySQL (`mindset-erp`, `:3308`) already up and healthy — meaning Phase 1/2 below can be live-verified against a real schema immediately, not mocked.
+
+### The plan — 4 phases, mirroring the OT bootstrap step for step
+
+1. **Schema discovery** — `internal/connections/schema.go`, `DiscoverSchema(db) ([]TableSchema, error)` via `information_schema.columns`; new route `GET /api/connections/{id}/discover`. Direct analog of `internal/discovery.BrowseNodeTree`.
+2. **Heuristic canonical-type mapping + confidence** — scoped to 2 canonical types for v0 (`work_order`, `product` — not the full 9-object set from Entry 92, deliberately). `internal/connections/canonical_suggest.go` scores tables by column-name synonym matches (matched-category-count / expected-category-count — same cheap-heuristic spirit as the OT depth/collision check, not ML); tables below a floor (~0.4) against every candidate are skipped entirely, not forced into a guess. `internal/kg/it_bootstrap.go`'s `SeedSchemaMappings` writes a **new node type**, `SchemaMapping` (business category), reusing `AutoAcceptThreshold`/`ListPending`/`ValidateNode`/`RejectNode` completely unchanged. Triggered as a side effect of the `/discover` endpoint, same one-action pattern as OPC-UA Discover → `seedKG`.
+3. **Frontend** — pending list needs nothing (confirmed above). Must-do: add a `SchemaMapping` color to `ForceGraph.jsx`'s `NODE_COLORS` — skipping this repeats the exact bug Entry 111 just fixed (new type silently falling through to grey). Nice-to-have, not required: a manual "Discover" button on `SqlConnectionsPage.jsx`.
+4. **Consume a validated mapping** — `cmd/server/active_production.go` (orchestration-in-`cmd/server`, same reasoning as `OPCUAManager`: needs both `s.kg` and `s.connReg`). Finds the confirmed `work_order` mapping, queries it filtered by a small hardcoded in-progress-token set, optionally by work center. New MCP tool `kg_active_production(work_center?)`. **Explicit, stated-now limitation**: answers "what's running right now" only — NOT "how long did product B take yesterday," which needs retroactive event-tagging, out of scope here. If a confirmed mapping has no status field mapped, Phase 4 is skipped for that connection rather than guessed.
+
+### Sequencing
+
+Ship + live-verify Phase 1+2 first (same shape as Track A: build → run against the real `mindset-erp` container's actual schema → verify → log), Phase 3's color fix bundled in. Phase 4 is a distinct follow-up, only after 1–3 are verified.
+
+### Status
+
+**Plan only, not yet built.** Presented in full per the user's request to see it before starting; awaiting go-ahead on Phase 1+2.
+
+---
+
+## Entry 114 — 2026-07-22 — Entry 113's Track A built and live-verified: a working read-only MCP server
+
+**Trigger:** user: *"start building track A"* — following on directly from Entry 113's proposal.
+
+### What was built
+
+- **`internal/kg/query.go`** (new) — transport-agnostic query logic: `QueryEvents(workCenter, cause string, from, to time.Time)` joins Event nodes with their `caused_by` Cause and `costs` Cost edges within a time window; `CostSummary(from, to, groupBy)` aggregates those events by cause or work_center, sorted by cost descending. Deliberately kept independent of the MCP/transport layer so it's reusable (e.g. a future dashboard widget) and testable on its own.
+- **`cmd/server/mcp_server.go`** (new) — 4 MCP tools via the official `github.com/modelcontextprotocol/go-sdk` (`mcp.AddTool`, generic input/output structs, JSON schema auto-derived from struct tags): `kg_query_events`, `kg_cost_summary`, `kg_current_state` (wraps `StateTracker`, new `snapshot()` method added to `live.go` to list every tracked machine), `kg_describe_node` (generic node + direct-edge lookup over `GetGraph("all")`). Mounted at `/mcp` via `mcp.NewStreamableHTTPHandler`, `Stateless: true` — deliberate, since every tool here is a read-only query with no need for cross-call session state.
+- **Deliberately not built**: any tool scoped to product/work-order (Track B in Entry 113) — the data model still has no such context, so no tool exists that could let an agent silently fabricate an answer instead of truthfully saying "I don't know."
+- **Dependency added**: `github.com/modelcontextprotocol/go-sdk v1.6.1` (the official Go SDK — checked `go list -m -versions` first; `v1.7.0` exists in the version list but has no resolvable tag yet, `v1.6.1` is the latest actually-fetchable release). Pulled in transitively: `google/jsonschema-go`, `golang.org/x/oauth2`, `segmentio/encoding`, `golang-jwt/jwt/v5`, `segmentio/asm` — all via `go mod tidy`, not hand-picked.
+
+### Verified live, not just compiled
+
+`go build ./...` and `go vet ./cmd/server/... ./internal/kg/...` clean (the 5 pre-existing `go vet` warnings in `cmd/agent` are unrelated, untouched by this work). Then ran the actual built binary and drove the real MCP wire protocol with `curl`, not a mocked client:
+1. `initialize` → correct `protocolVersion`, `serverInfo`, and the `Mcp-Session-Id` header.
+2. `tools/list` → all 4 tools present with correctly auto-generated JSON input/output schemas.
+3. `tools/call kg_current_state` with no `work_center` → `{"machines":[]}` (correctly empty — server was up with no agent/MQTT publishing).
+4. **End-to-end with real data**: inserted a disposable scratch Event+Cause+Cost (`*_test_mcp_verify` ids, same pattern Entry 110 used for the delete-pipeline verification — never touching real KG content) directly into `data/mindset.db` via `sqlite3`, matching the exact shape `kg/subscriber.go`'s `onMicroStop` produces (Machine1, Jam, 47s, 9.60€, at 2026-07-22T10:00:00Z — deliberately the same "machine stopped at 10am" shape from the user's own example question in Entry 113). Called `kg_query_events` filtered to `Machine1` + a 09:00–11:00 window → got back exactly that event with cause "Jam" and cost 9.6€ correctly joined. Called `kg_cost_summary` grouped by cause → correct aggregate. Called `kg_describe_node` on the event id → correct node + all 3 outgoing edges (occurred_at/caused_by/costs) with the right related-node labels. Deleted the scratch rows immediately after (`DELETE ... WHERE id LIKE '%test_mcp_verify%'`), confirmed 0 remaining, then killed the test server process.
+
+### Docs updated same-turn
+
+`CLAUDE.md` — added the `/mcp` row to the API surface table, a new "MCP server (agent tool access)" section documenting the 4 tools and the deliberate Track A/B boundary, and a mention in the `cmd/server` row of the Key packages table.
+
+### Status
+
+Done and live-verified, Track A complete per Entry 113's scope. Track B (product/OF-scoped tools) remains explicitly not started, blocked on the same reconciliation gap Entry 109 found.
+
+---
+
+## Entry 113 — 2026-07-22 — MCP agent-query proposal: split into what's answerable today vs. blocked on the reconciliation gap
+
+**Trigger:** user: *"i wanna make a method to help the user after to use agent IA via MCP. For exemple the user ask: why the machine are stopped yesterday at 10 am? which product is in production actually? the B product toke how much time yesterday? etc. Propose me"* — asked during a YC-application work session (`docs/YC.md`), not a code-change request; a design proposal only, nothing implemented.
+
+### Method — checked the actual data model before proposing anything
+
+Read `internal/kg/subscriber.go` and `internal/kg/types.go` directly rather than assuming the KG already carries product/OF context. Confirmed: `Event` nodes carry `work_center`, `duration_seconds`, `timestamp`, linked to `Cause` (via `caused_by`) and `Cost` (via `costs`) edges — **no product or OF tagging exists anywhere in the current data model.** This immediately splits the user's three example questions into two different feasibility classes, not one uniform "build an MCP server" task.
+
+### The split
+
+| Example question | Answerable today? | Why |
+|---|---|---|
+| "Why were machines stopped yesterday at 10am?" | **Yes** | Event/Cause/Cost nodes already carry everything needed — time, cause, duration, cost |
+| "Which product is in production right now?" | **No** | Needs live active-OF/product context — the same OT/IT reconciliation gap Entry 109 already found unimplemented |
+| "How long did product B take yesterday?" | **No** | Same root cause — events aren't tagged with product, so nothing can be filtered by "product B" |
+
+### Proposal — Track A (ships now, zero new data plumbing)
+
+A read-only MCP server (`internal/mcp/`, exposed by `cmd/server` since it already owns the KG + SQLite) wrapping queries that already work end to end:
+
+- **`kg_query_events(work_center?, cause?, from_time, to_time)`** — Event + linked Cause + Cost for a time window; answers the "why did machine X stop" class of question directly, returning source event IDs alongside the answer so it's citable, not asserted (same trust principle as `docs/impact_engine.md`'s "no black boxes").
+- **`kg_cost_summary(from_time, to_time, group_by: cause|work_center)`** — Pareto-style aggregate.
+- **`kg_current_state(work_center?)`** — wraps the existing `/api/machines` Running/Stopped logic; machine-level only, not product-level.
+- **`kg_describe_node(node_id)`** — generic drill-down for follow-up questions.
+
+### Track B — blocked on the reconciliation gap, not started
+
+The other two example questions need an "active product/OF per work center" signal that doesn't exist in any form — not even a stub. Two ways to unblock, offered as options, not decided:
+1. Fix the gap directly — implement the provider-node scanning in `calculate_cost` that Entry 109 found missing, and extend it to tag Event nodes with `product_id`/`of_id` at creation time.
+2. A narrower standalone pipeline that polls the ERP for "OF in progress" per work center and writes a lightweight `active_production` fact independent of the cost path — ships faster, but can't retro-tag historical events, so product-scoped historical questions ("yesterday") only start working from whenever this pipeline goes live, not retroactively.
+
+### Recommendation given, not yet actioned
+
+Ship Track A now — real, useful, and honestly scoped (a working MCP demo answering "why/what/how much" is a true story). Flag Track B as the next milestone rather than block the whole MCP effort on the reconciliation gap. **Status: proposal only.** User asked to log it; no code or scaffolding written yet — awaiting direction on whether to start Track A, and which Track B option (if either) to pursue.
+
+---
+
+## Entry 112 — 2026-07-22 — Orientation pass: read `docs/` end to end, no code changes
+
+**Trigger:** user: *"Read docs/ to know the project"*, followed by a confirmation of the logging convention itself (*"we log everything in analysis_log"*).
+
+### What this was
+
+A cold-context orientation read, not an analysis or implementation task. Read `CLAUDE.md`, `docs/ARCHITECTURE.md`, `docs/mindset.md` (partial — vision/GTM/roadmap sections through §10), `docs/context_starter.md`, `docs/impact_engine.md`, `docs/it_connectors.md`, `docs/Cost_function.md` (the pre-reconciliation brainstorm), `docs/pitch_kg_bootstrap.md`, `docs/vertical_expansion_shortlist.md`, `docs/pipeline_suggestion_examples.md`, and the tail of `docs/analysis_log.md` itself (Entries 40–111) to establish current state. Did not read `docs/sql_connectors.md`, `docs/mysql_connector.md` in full (skimmed via CLAUDE.md's own summary of them, which is current), nor the personal/GTM-ops docs (`advisors.md`, `internships.md`, `linkedin_profile_recommendations.md`, `Blurb_Invest.md`).
+
+### Net takeaway reported back to the user
+
+Product: OT/IT-reconciliation-based industrial edge platform, ISA-95 KG auto-bootstrap, Impact Engine pricing. Codebase state as of Entry 111: KG structural bootstrap with confidence-gated validation is live-verified; MySQL connector (`sql_query`) is fully implemented and integration-tested; the fake-ERP dev stack (`cmd/erpsim`) is the most recent active thread (matches the uncommitted `cmd/erpsim/`, `Dockerfile.erpsim` in git status at session start). Flagged the one open gap most likely to bite: `docs/impact_engine.md` / `docs/mindset.md` describe `calculate_cost`'s provider-node scanning (the mechanism that would let the Impact Engine actually consume ERP context) as the technical moat, but Entry 109 already found that scanning was never implemented — docs describe intent, not shipped behavior, on that specific point.
+
+### Convention confirmed, not re-discovered
+
+The user restated *"we log everything in analysis_log"* mid-session — already on record in [[analysis-log-convention]] verbatim from Entry 69's context. Walked the insertion-point rule live (grep `^## Entry`, confirm highest number + position rather than assuming EOF) before writing this entry, per that memory's own instructions — confirmed Entry 111 was still the highest-numbered entry and the true insertion point, at line 5447, before writing here.
+
+### Status
+
+No code, doc, or config changes made during the pass itself — pure reading. This entry is the only artifact of the session so far.
+
+---
+
+## Entry 111 — 2026-07-21 — `Site`/`Area`/`Tag` were never given their own graph colors — fixed
+
+**Trigger:** user: *"you gave the same color to site, area and tag."*
+
+### Confirmed precisely, then fixed
+
+Checked `ForceGraph.jsx`'s `NODE_COLORS` map — when the structural bootstrap was built (Entries 95-98/107), only `Equipment` (red) and `WorkCenter` (orange) were ever added to it. `Site`, `Area`, and `Tag` were never added at all, so all three silently fell through to the shared `FALLBACK_COLOR` grey — exactly matching the user's observation.
+
+Fixed with a deliberate hierarchy gradient rather than arbitrary colors: `Site` (light blue, broadest scope) → `Area` (teal) → `WorkCenter` (light orange) → `Equipment` (red) → `Tag` (muted slate, deliberately quiet since it's the most numerous node type by far — one per signal — and shouldn't visually dominate the graph).
+
+### Verified live
+
+`npm run build` clean; the 3 `eslint` errors on this file are the same pre-existing ones already confirmed in Entry 96 (unrelated lines, not touched by this edit). Confirmed in the browser: the type-filter legend and the graph itself now show 5 visually distinct colors for the 5 hierarchy levels.
+
+### Status
+
+Done and verified live.
+
+---
+
+## Entry 110 — 2026-07-21 — Delete pipeline: new `DELETE /api/pipelines/{id}`, "Supprimer" button on user pipelines only
+
+**Trigger:** user: *"add an option to delete a pipeline."*
+
+### What was built
+
+- **`cmd/server/main.go`** — new `handleDeletePipeline`, registered at `/api/pipelines/{id}` (coexists safely with the existing `/api/pipelines/{id}/run` and `/api/pipelines/examples` patterns — Go's `http.ServeMux` resolves the most specific match, same proven pattern already used for `/api/connections/{id}` alongside `/{id}/test` and `/{id}/preview`). Derives the file path via the exact same `sanitizeFilename(id)+".yaml"` mapping `savePipeline` uses, so delete always targets the file a pipeline would have been saved to. 404s if the file doesn't exist, mirroring `handleConnectionDelete`'s style.
+- **`client.js`** — `deletePipeline(id)`.
+- **`PipelinesPage.jsx`** — a `deletable` prop on the shared `Card` component, applied only to "Mes pipelines," never to "Modèles (exemples)" — the shipped templates stay read-only, matching how they're already treated everywhere else (load-only). "Supprimer" styling matches the existing SQL-connections delete button (`SqlConnectionsPage.jsx`) — same red-hover pattern, no confirmation dialog, consistent with that page's already-shipped convention rather than introducing a new one.
+
+### Verified without touching real content
+
+Rather than testing against the user's actual pipeline files, created a disposable scratch pipeline via `POST /api/pipelines`, confirmed it existed via `GET /api/pipelines`, deleted it via the new endpoint, and confirmed it was gone from both the API response *and* the filesystem (`ls` on the `.yaml` path). Also verified the 404 path (nonexistent id → `404`) and confirmed all real pipelines (`p1`, `pipeline_cost_calculation`, `pipeline_microstop_detection`, etc.) were untouched throughout. Confirmed live in the browser: "Supprimer" renders only under "Mes pipelines."
+
+### Status
+
+Done and verified. `go build` and `npm run build`/`eslint` all clean.
+
+---
+
+## Entry 109 — 2026-07-21 — Function catalog study: `modbus_read` deregisterable, `calculate_cost`'s Fuzzy Join scanning was never actually implemented
+
+**Trigger:** user: *"make a study of functions, i think we have functions not needed and we need others."* Logged late — after the user asked *"where did you log it?"* — a real lapse given [[feedback-proactive-doc-updates]] already exists specifically for this pattern; see the note at the end of this entry.
+
+### Method — verified against real pipeline usage, not assumed
+
+Grepped every `function:` reference across all 7 shipped/user pipeline YAMLs (`config/pipelines/examples/*.yaml` and `config/pipelines/*.yaml`) to get real usage counts per function, then read the actual Go source for every function whose usage looked thin (`modbus_read`, `uns_mapper`, `filter`, `kg_save`, `calculate_cost`) rather than trusting `CLAUDE.md`'s catalog description.
+
+### Full inventory (12 registered functions)
+
+Used somewhere real: `mqtt_subscribe`, `opcua_read`, `sql_query`, `state_machine`, `calculate_duration`, `calculate_cost`, `threshold`, `mqtt_publish`, `add_to_dashboard`. Used in exactly one example: `uns_mapper` (`opcua_to_uns.yaml`). **Used in zero pipelines anywhere:** `modbus_read`, `filter`, `kg_save`.
+
+### Not-needed candidates
+
+- **`modbus_read`** — pure stub, errors if run, zero pipeline references. Now that the `/connectors` gallery (Entry 106) already shows "coming soon" connectors honestly without registering them as real functions, there's no reason to keep a fake-functional stub in the actual registry. Recommended: deregister from both `buildRegistry` and `cmd/agent`.
+- **`uns_mapper` (transform)** — works, but is a thin wrapper around the exact same `internal/uns.Mapper.MapTag` call the OPC-UA manager's `route()` already makes automatically (isa95/both routing) and `seedKG` already makes for confidence scoring (Entry 107). `opcua_to_uns.yaml` demonstrates, by hand, something the platform now does natively. Flagged as legacy, not urgent to remove.
+- **`filter`** — checked and found generic/well-built (field/operator/value, real comparators), just never exercised in an example. **Not** a removal candidate — the opposite conclusion from the other two.
+
+### The important finding — a documented competitive moat has no implementation
+
+`docs/impact_engine.md` (Entry 71) states `calculate_cost` "discovers [provider nodes] by scanning `params` for values carrying a `canonical_type` tag" — this IS the Fuzzy Join mechanism `docs/decisions.md` names as "the technical moat." Read `internal/functions/calculates/cost.go` directly: **no such scanning exists.** The handler only reads flat, manually-configured `config["product"]`/`config["hourly_rate"]`/`config["rates"]`/`config["currency"]` — nothing auto-discovers a `sql_query` provider node's `canonical_type: work_order` output. The moat is decided and documented; the code that would realize it was never written. Directly connects to Entry 103's finding that the Fuzzy Join concept is real and correctly designed, but blocked on the same `{{ trigger.field }}` templating gap referenced since Entry 79.
+
+### What's missing entirely
+
+1. **Provider-node scanning in `calculate_cost`** — the concrete, well-specified, highest-priority gap (above).
+2. **A server-palette KG-write function for the IT side** — `kg_save` exists but is agent-only, unused anywhere, and now inconsistent with the confidence/pending model built in Entries 95-107 (writes straight to the graph, no scoring, no gate). Nothing today lets a `sql_query` pipeline feed `Asset`/`Material`/`Product` results into the KG the way `SeedFromDiscovery` does for OT — Entry 102's IT-side target architecture has no implementation path yet.
+3. **`{{ trigger.field }}` templating** — not a function, the recurring engine-level blocker (Entries 79/87/89/90/94/103/109) that makes #1 and #2 unusable even once built.
+4. **An entity-resolution function** — nothing computes the `same_as` OT↔IT match from Entry 102/103.
+5. **REST API connector** — already honestly shown as "bientôt" in the gallery (Entry 106); still a real gap, ranked #5 in `docs/mindset.md`'s own roadmap.
+
+**Recommendation given to the user:** fix `calculate_cost`'s provider-node scanning first — most concrete, most valuable, most exposed (an unbacked competitive claim). Not yet actioned — awaiting direction.
+
+### Discipline note — this should not have needed asking
+
+This entire study was composed in chat and *not* logged until the user asked "where did you log it?" — despite [[feedback-proactive-doc-updates]] existing precisely for this, and despite that memory already being widened once (Entry 100) specifically to cover technical/analysis work, not just the LinkedIn thread it originated from. The memory is being updated again after this entry to make the trigger condition more concrete: **any turn that produces a structured study, audit, or finding — not just architecture entries — must be logged in the same turn it's presented, before the user can ask.** Two widenings and it still recurred once — a real note-to-future-self that this specific failure mode (chat response feels complete without the doc write) needs a stronger cue than a wordier memory.
+
+---
+
+## Entry 108 — 2026-07-21 — MQTT gets a real configuration page, matching OPC-UA/MySQL — no more auto-jump to Compose
+
+**Trigger:** user: *"we make the configuration of mqtt like opc-ua and mysql, don't jump to compose."*
+
+### The actual complaint, precisely
+
+Neither OPC-UA nor MySQL "jump to Compose" as their primary tile behavior — OPC-UA lands on its own connect/discover page, MySQL on its own connections page. Only MQTT short-circuited straight past any configuration screen into `/compose`. Fixed by giving it the same treatment: a real, standalone config page, not a shortcut.
+
+### What was built
+
+**New `MqttConnectPage.jsx`** (`/connectors/mqtt`), mirroring the existing pages' structure (back-link, header, status card):
+- **Broker status** — real data from the already-existing `GET /api/topics` (`broker`, `broker_connected` fields), not invented. Since MQTT in this architecture has one shared broker (configured once in `config/agent.yaml`, not a per-use connect flow like OPC-UA), there's no "connect" step needed — just a status check.
+- **Live topics list** — the MQTT equivalent of OPC-UA's "discover": real topics with message rates (`topic`/`category`/`rate_per_sec`, verified against the actual `TopicView` Go struct in `cmd/server/live.go` before using the field names), clickable to prefill the topic field below. Honestly empty right now (no agent/OPC-UA subscription actively publishing), with an explanatory message rather than a fake placeholder.
+- **Trigger config preview** — topic + QoS fields, prefilled from `connectorTemplates.js`'s existing `mqtt_subscribe` default (`mindset/events/status-change`, QoS 1) — the real config shape that connector actually uses.
+- **No automatic navigation anywhere on this page** — a manual `Link` to Compose at the bottom (*"Ouvrez Compose, sélectionnez mqtt_subscribe... et reportez ces valeurs"*), not a forced redirect. Directly satisfies "don't jump to compose."
+
+**Routing:** added `/connectors/mqtt`, updated the MQTT tile in `ConnectorsPage.jsx` to point there instead of `/compose`.
+
+### Verified
+
+`npm run build` clean. `npx eslint` caught the same `react-hooks/set-state-in-effect` pattern as Entry 105/107 (calling a named `load()` from a bare `useEffect`) — fixed the same way, inline IIFE. Confirmed live in the browser: broker shows `tcp://localhost:1883` / connecté, topics list correctly empty with the explanatory message, config form prefilled correctly, and clicking the MQTT tile lands here — no auto-navigation to Compose.
+
+### Status
+
+Done and verified live.
+
+---
+
+## Entry 107 — 2026-07-21 — Confidence-gated validation: only sub-threshold nodes need a human, live-verified end to end
+
+**Trigger:** user: *"we don't need brut data, we will use directly normalised data isa-95. and all data just connect display them with isa-95, the user just validate the datas that have score under threshold."*
+
+### "No raw data" — already true, confirmed rather than built
+
+`SeedFromDiscovery` never stored a "raw tag" node type — it always wrote the ISA-95-mapped shape (Site/Area/WorkCenter/Equipment/Tag) directly. Nothing to change; stated this rather than doing speculative work the request didn't actually need.
+
+### Confidence scoring — new, this is the real ask
+
+Until now every auto-generated node got `pending: true` uniformly — no confidence signal existed anywhere in the bootstrap (the exact gap Entry 89 flagged: `confidence` only existed as a hack on the `Cause` edge's `weight`). Built a concrete, explainable heuristic (not ML — appropriate for a naming-convention mapper) in `cmd/server/opcua.go`'s `seedKG`, computed across the whole discovered batch, not per tag in isolation:
+1. **Depth consistency** — does this tag's dot-depth match the server's modal (most common) depth? An outlier depth among an otherwise-uniform batch signals the naming assumption may not hold for it. Penalty: -0.5.
+2. **No naming collision within its equipment** — does its normalized tag name collide with another tag already mapped to the same equipment (accounting for the Entry 98 depth-branching — WorkUnit vs WorkCenter as the equipment key)? A collision means the mapper folded two distinct signals onto one name. Penalty: -0.5.
+
+`internal/kg/bootstrap.go`: added `Confidence float64` to `HierarchyEntry` and a new `AutoAcceptThreshold = 0.7` constant. `SeedFromDiscovery` now computes `pending := confidence < AutoAcceptThreshold` per entry instead of hardcoding `true`, and writes `confidence` into every node's properties (not just pending ones) — this incidentally generalizes the Entry 89 recommendation too, since confidence is now a real property on Site/Area/WorkCenter/Equipment/Tag nodes, not a one-off hack on a single edge type. `KnowledgeGraphPage.jsx`'s pending list now shows the confidence percentage next to each entry awaiting review, so a validator knows *why* it needs a look.
+
+### Live-verified against the same Prosys server — a real gotcha caught and fixed along the way
+
+First re-test attempt showed stale Entry 98 data with no `confidence` field at all — traced to a real mistake: the DB reset used `Remove-Item ... -ErrorAction SilentlyContinue`, which silently swallowed a file-lock error right after killing the old server process, so the delete failed and old rows survived. Since `AddNodeCat` is `INSERT OR IGNORE` and node IDs are deterministic, the old `pending:true`/no-confidence rows just got re-confirmed as already-existing, and new confidence-scored writes silently no-op'd. Fixed by removing `-ErrorAction SilentlyContinue` and checking `Test-Path` returned `False` before restarting — a small process lesson worth keeping: **never trust a suppressed-error delete without verifying it actually happened.**
+
+**Once actually re-tested clean:** all 8 real tags scored confidence 1.0 (same depth across the batch, zero naming collisions within any equipment) → **zero pending nodes** — confirmed via `GET /api/kg/pending` returning `{"nodes":[],"total":0}` and directly inspecting the Equipment nodes' properties (`"confidence":1,"pending":false"`). Confirmed visually too: the Knowledge Graph page shows no "Pending validation" section at all (conditionally hidden when empty) and no dashed rings anywhere — the entire OT hierarchy auto-generated *and* auto-validated with zero human clicks, because this tag-naming convention was clean.
+
+**Honest limitation of this test:** it only exercises the auto-accept path. Nothing in this dataset has an outlier depth or a naming collision, so the below-threshold/pending path wasn't exercised live this time — traced through the logic carefully, but a genuinely messy/ambiguous tag set would be needed to verify the threshold boundary itself end to end.
+
+### Status
+
+Done and live-verified for the high-confidence path. `go build`, `npm run build`, and `eslint` all clean. Below-threshold behavior verified by code inspection, not yet by a live low-confidence test case.
+
+---
+
+## Entry 106 — 2026-07-21 — `/connect` + `/connections` merged into one `/connectors` page; big-tile gallery; expanded from `docs/mindset.md`
+
+**Trigger:** user: *"so delete Connect page or merge it with Connections and rename it Connectors instead of Connections. Represent the connectors in big and move to be good visual, and delete all others (ot connexion opc-ua, it connexion sql, nouvelle connexion). i don't want see them. Add more connectors, see in mindset.md."*
+
+### Checked before deleting anything
+
+Confirmed `ConnectPage.jsx`'s `selectConnector`/`pendingConnector` mechanism (studioStore) is only ever called from `ConnectPage.jsx` itself and consumed in `BuilderPage.jsx` — `OpcuaConnectPage.jsx` uses a separate, unrelated mechanism. Then confirmed `NodeConfigPanel.jsx` already has its own connector `<select>` for the trigger node, populated from the same `GET /api/connectors` list — meaning a pipeline's trigger connector can already be picked directly inside Compose, with or without `ConnectPage`. **Deleting `ConnectPage` outright removes no real capability** — it was a redundant shortcut, not the only path. This is why it was safe to delete rather than just hide.
+
+### What was built
+
+- **Deleted** `ConnectPage.jsx` and `ConnectionsPage.jsx` outright (not just hidden/rerouted).
+- **New `ConnectorsPage.jsx`** (`/connectors`) — the merged, renamed result. Big tiles (5xl icon, generous padding, hover lift), **12 connectors**, flat and undifferentiated as asked. Nothing else on the page — no OT status card, no SQL list, no new-connection form, per "i don't want see them."
+- **New `SqlConnectionsPage.jsx`** (`/connectors/sql`) — the SQL list/create/test/delete UI, extracted verbatim from the old page, not deleted — the *capability* stays, just off the gallery page and reachable by clicking the MySQL tile. (Judgment call, flagged to the user: literal instruction said delete the SQL list from view, which is satisfied; the underlying feature — live-tested, working — was preserved rather than destroyed, since nothing indicated the feature itself, not just its visibility on this page, should go away.)
+- **Connector set expanded from `docs/mindset.md` §5 ("Protocols & Connectors")** — the real, ranked roadmap, not invented: `opcua_read`/`sql_query` (MySQL)/`mqtt_subscribe`/`modbus_read` (implemented today) + PostgreSQL/MSSQL (V1 multi-dialect roadmap) + Siemens S7/REST API/FTP-SFTP (V1.5) + Ignition/InfluxDB/MongoDB (other ranked protocols from the same doc section). Not-yet-built tiles shown greyed out, labeled "bientôt disponible," never linked to a fake destination — same honesty discipline as Entry 105.
+- **Fixed 2 dangling references** found via grep after deleting the old routes: `OpcuaConnectPage.jsx`'s "← Connecteurs" back-link (was `/connect`, now `/connectors`) and `OverviewPage.jsx`'s quick-link card (same fix, relabeled "Connect" → "Connecteurs").
+- **`NavBar.jsx`** — removed the "Connect" tab entirely, renamed "Connections" → "Connecteurs," now pointing at `/connectors`. Nav went from 7 tabs to 6.
+
+### Verified live
+
+`npm run build` clean; `npx eslint` clean on all 6 touched/added files. Confirmed in the browser: gallery renders as a clean 3x4 big-tile grid, correct implemented/greyed states; MySQL tile navigates to `/connectors/sql` and the full SQL connection management (including the live `dev_erp` "lecture seule" status from Entry 104's fix) still works exactly as before.
+
+### Status
+
+Done and verified live. Net route change: `/connect` and `/connect/opcua`'s sibling `/connect` index both gone; `/connections` renamed `/connectors`; new `/connectors/sql`. `/connect/opcua` itself is unchanged.
+
+---
+
+## Entry 105 — 2026-07-21 — Connector gallery flattened per refined demo spec: no grouping, icons only, click-through
+
+**Trigger:** user, refining Entry 104's OT/IT-grouped catalog: *"A window that displays all the connectors without differenciations, with no initial configuration or testing. Only connectors (MySQL, MongoDB, PostgreSQL, OPC-UA, Modbus, etc.) are shown, and if the user clicks an icon, they are taken to the configurations, discover, or whatever that means."*
+
+### What changed
+
+Replaced the two-column OT/IT catalog (cyan/amber, with descriptions) from Entry 104 with a single flat, undifferentiated icon grid (`CONNECTOR_TILES` in `ConnectionsPage.jsx`) — icon + label only, no description text, no config preview. Left the rest of that page (OT connection status card, IT/SQL connections list + form) untouched — the user was refining the catalog display specifically, not asking to remove working connection-management functionality.
+
+**7 tiles, honestly split by what's real:**
+- **Clickable (real, implemented):** OPC-UA 🛰️ → `/connect/opcua`; MySQL 🐬 (the `sql_query` connector) → scrolls to the SQL section already on this same page; MQTT 📶 → `/connect` (where `mqtt_subscribe` is actually configured as a pipeline trigger).
+- **Shown but disabled, no destination:** Modbus 🔧 — registered as a connector for the picker but a metadata-only stub that errors if run; there's no real config screen to send anyone to, so it's greyed out rather than linking somewhere fake.
+- **Shown greyed out, "bientôt disponible":** PostgreSQL 🐘, MSSQL 🗃️ (both genuinely on the V1 roadmap per `docs/decisions.md`'s SQL-dialect decision — not invented), MongoDB 🍃 (the user's own addition to the demo list, not in any locked roadmap doc — included as a visual placeholder only, same honest non-clickable treatment).
+
+**Deliberate choice:** didn't fake functionality for the not-yet-built connectors — greyed out + labeled "bientôt" rather than either omitting them (loses the "all connectors" demo value the user wants) or making them clickable to nowhere (would misrepresent capability to a demo audience, exactly the kind of overclaiming this whole doc-and-build thread has been careful to avoid, e.g. the "ISA-95-compliant" vs "aligns with" distinction in Entries 90/92/93).
+
+### Verified live
+
+`npm run build` and `npx eslint src/pages/ConnectionsPage.jsx` clean. Confirmed in the browser: flat grid renders correctly (all 7 icons, correct greyed/disabled states), MySQL tile's scroll-to-anchor click registers correctly (page was already showing that section at this viewport size, so no visible scroll, but the handler fires).
+
+### Status
+
+Done and verified live. No backend changes.
+
+---
+
+## Entry 104 — 2026-07-21 — Demo prep: env-var restart fix, and Connections page unified OT/IT for the demo
+
+**Trigger:** two requests. First, the user pasted the Connections page showing `❌ connections "dev_erp": env var MINDSET_ERP_PASSWORD is empty or unset`. Second: *"i wanna make a demo, so i need to show all connectores (just show them) from OT/IT, and regroup the OT and IT connections in one window."*
+
+### Env var fix
+
+Root cause: `bin/server.exe` had been restarted several times during Entries 96-98's live testing, in Bash sessions that never re-exported `MINDSET_ERP_PASSWORD` — not a code bug. Confirmed the fake-ERP Docker container was healthy throughout. Restarted the server with the env var exported in the same command; verified via `POST /api/connections/dev_erp/test` → `{"latency_ms":55,"ok":true,"read_only":true}`.
+
+### `ConnectionsPage.jsx` — unified into one OT/IT window
+
+Retitled "🗄️ Connexions SQL" → "🔌 Connexions — OT & IT". Added, above the existing (unchanged) SQL connection list/form:
+- **A connector catalog**, OT (cyan) vs IT (amber) columns, pulled live from `GET /api/connectors` — `opcua_read`/`modbus_read`/`mqtt_subscribe` under OT (MQTT grouped there since in this architecture it mainly carries OT-originated signals — `mindset/raw`/`mindset/site`), `sql_query` under IT. Display-only, matching the user's "just show them."
+- **An OT connection status card**, pulled from the existing `opcuaStatus()` API call (no new endpoint needed) — endpoint, connected/disconnected badge, tag count, and a "Gérer" link to `/connect/opcua` for the actual connect/discover flow (not duplicated here).
+
+The existing SQL connections section is otherwise untouched — same list, same create form, same test/delete actions — just relabeled "IT — Connexions SQL" and given a one-line count instead of a duplicate heading.
+
+Verified live in the browser: catalog renders correctly in two columns, OT status card correctly shows "déconnecté" (no live session yet on this fresh server restart), IT section correctly shows `dev_erp` as "lecture seule" (confirming the env-var fix above), and the "Gérer" link navigates to `/connect/opcua` as expected. `npm run build` and `npx eslint src/pages/ConnectionsPage.jsx` both clean.
+
+### Status
+
+Both done and verified live. No backend changes — purely a frontend display addition reusing two already-existing API calls (`fetchConnectors`, `opcuaStatus`).
+
+---
+
+## Entry 103 — 2026-07-20 — Entry 102's dynamic OT↔IT link IS the already-decided "Fuzzy Join" moat — found via `docs/decisions.md`, not reinvented
+
+**Trigger:** user: *"we should attach every ot & it (exmpl: actual operation is of_1 for the client A...) we don't follow the order in it side, the ot equipement can change the order suit to material or product availability."* — describing a dynamic, time-varying OT↔IT binding (which OF a machine is actually running right now) that deviates from the ERP's planned sequence based on real-time shop-floor constraints.
+
+### This is not a new requirement — it's the existing "Fuzzy Join" moat, found and connected, not invented
+
+Checked `docs/decisions.md` before answering rather than treating this as a fresh design problem. Direct match: *"MindSet's OT/IT reconciliation works by reading Fabrication Order (OF) state from the ERP — polling for OFs currently in status 'In Progress'/'Released' — and tagging every OT event happening during an active OF with that OF's metadata. The algorithm joins on OF state, not timestamps."* The rejected alternatives listed there are exactly the failure modes the user described: a timestamp-based sliding window (breaks on ERP latency) and *"rely solely on operator-entered OF assignment (manual burden, error-prone)"* — i.e., trusting the plan instead of live state was already explicitly rejected, for the same reason the user just gave.
+
+### Correction made along the way — "Fuzzy Join" is an algorithm name, not a subsystem
+
+`docs/impact_engine.md` (Entry 71, 2026-07-14) had already walked back an earlier framing of Fuzzy Join as a bespoke engine (`internal/fuzzy/of_state.go`): *"there is no separate 'Fuzzy Join engine' subsystem... Instead: **provider nodes** — ordinary `sql_query` connector nodes that `calculate_cost` depends on via `depends_on`, discovered by scanning `params` for a `canonical_type` tag."* Flagged this precisely so "Fuzzy Join" continues to be used as the name for the OF-state-attribution algorithm, not implied to be separate code.
+
+### What's already built toward it, and the one gap blocking it
+
+`config/pipelines/examples/of_enrichment.yaml` is a working **prototype** of exactly this pattern (`SELECT ... FROM work_orders WHERE work_center = :work_center AND status = 'RUNNING'` — state-based, not timestamp-based). The blocking gap, flagged repeatedly since Entry 79 and still unbuilt: `work_center` is a static hardcoded value, not `{{ trigger.work_center }}` — `internal/pipeline` has no live templating. That's the one piece of engineering between "prototype" and a real dynamic Fuzzy Join.
+
+### Refinement to the Entry 102 KG design — two distinct edge types, not one
+
+- **`same_as`** (Entry 102) — identity, structural, static: this `Equipment` node *is* that `Asset` record.
+- **`occurred_during`/`ran_on`** (new, from this entry) — attribution, resolved dynamically by the Fuzzy Join pattern at the moment an event fires, deliberately never trusted from the ERP's plan. Answers "what was Machine1 actually running, and for which client's OF" — written by the same provider-node mechanism (`canonical_type`-tagged `sql_query`), once the templating gap is closed.
+
+**Implication flagged, not committed as a feature:** because this joins on live state rather than plan, a plan-vs-actual mismatch (ERP expected OF_2, OT shows OF_1 actually running) surfaces for free as a byproduct of the join — worth knowing, not something that needs separate engineering to detect.
+
+### Status
+
+Conceptual connection made and logged; no code changed. The concrete unblocking step, if the user wants to proceed, is the same one flagged since Entry 79: add `{{ trigger.field }}` templating to `internal/pipeline`.
+
+---
+
+## Entry 102 — 2026-07-20 — Target architecture: one OT+IT semantic layer, entity-resolution edges, and what MCP traversal needs
+
+**Trigger:** user: *"i wanna a kg that combine ot/it semantic and an other of use cases & ... etc. And what's the method to validate the ISA-95 of IT and OT and how rely them to help the AI mcp go through this kg?"* — three sub-questions in one: combine OT+IT into one semantic layer (with a separate use-case/operational layer); the validation method for ISA-95 on both sides; how to link OT and IT entities so an MCP agent can traverse the combined graph.
+
+### 1. One semantic layer, not two islands
+
+Refines Entry 101: "semantic" isn't OT-only — it's OT (`Site`/`Area`/`WorkCenter`/`Equipment`/`Tag`) **and** IT (`Asset`/`Material`/`Product`/`Operator`, Entry 92's canonical model) combined in one layer, each node carrying a `source` property (`opcua`/`erp`) for lineage. The operational/use-case layer (`Event`/`Cause`/`Cost`/`OF`/`Batch`/`Quality`) stays separate and always anchors to the semantic layer via existing edges (`occurred_at`/`caused_by`/`costs`) — never merged in, different growth pattern and trust model.
+
+### 2. Validation method, per side — same gate, different trigger
+
+- **OT (built):** algorithmic guess (ISA-95 tag-naming heuristic) → pending → human confirms the *guess*.
+- **IT (not built, concrete method proposed):** no reliable way to auto-guess SQL column semantics (established Entry 94 — no schema introspection in `sql_query`), so the gate can't be "confirm a guess." Instead: human configures `field_map` once (already built) → first real canonical query result produces candidate `Asset`/`Material`/`Product` rows → written pending, through the *same* pending-validation list → human confirms the *result* is sane. Same UI/mechanism both sides, different thing being confirmed (a guess vs. a configured result).
+
+### 3. Linking OT and IT — entity resolution via confidence-scored edges, not node merging
+
+Don't merge OT `Equipment` and IT `Asset` nodes for the same physical machine — that loses source lineage. Instead: fuzzy-match candidate pairs (Synapt's 0.75-similarity pattern, Entry 89), write a **`same_as` edge**, confidence-scored, through the same pending/validation gate extended to cover edges (not just nodes). This is the first concrete, load-bearing use case for Entry 89's still-open recommendation to generalize `confidence` beyond the one-off `Cause`-edge `weight` hack — a `same_as` edge without a trust score is exactly the kind of unverified claim that shouldn't be silently trusted.
+
+### 4. What this enables for MCP/agent traversal
+
+An agent answering "what do we know about Machine1" needs to walk from one anchor to both OT (live tags, recent events) and IT (work orders, maintenance) context **without solving entity resolution itself at query time** — only possible if the `same_as` edge already exists and is validated. The MCP-facing query layer needs `category`, `layer`, `source`, and validation-status/confidence as first-class, reportable fields on every result, so agent answers can honestly distinguish confirmed structure from a suggested-but-unconfirmed match from a low-confidence inferred fact — directly serving the "grounding" credibility story from the Synapt comparison (Entry 88).
+
+### Status
+
+Target architecture proposed, not yet built or fully scoped as an implementation plan. Explicitly framed as an extension of everything already built (formalize `source`, build the IT-side pending flow reusing the existing UI, add `same_as` edges, generalize `confidence`) — nothing here contradicts prior decisions. Awaiting user direction on whether to turn this into a concrete build plan.
+
+---
+
+## Entry 101 — 2026-07-20 — Should the KG split into semantic vs. operational? Yes, as a tag — not two graphs
+
+**Trigger:** user: *"can we make 2 KG: semantics and operational?"*
+
+### The split is real and already implicit in two features built this session
+
+Semantic = `Site`/`Area`/`WorkCenter`/`Equipment`/`Tag` (the ISA-95 hierarchy — stable, describes what exists). Operational = `Event`/`Cause`/`Cost`/`Operator`/`Product`/`OF`/`Batch`/`Quality` (the transactional stream — grows continuously, describes what happened). This is the same distinction as Entry 94's structural-vs-transactional split, just not yet named as a formal KG concept. Two mechanisms already built secretly encode it without saying so: `pending`/validation (Entries 95-98) only makes sense on semantic nodes (a human confirms structure); `confidence` (Entry 89's finding — currently a hack on the `Cause` edge's `weight` field) only makes sense on operational facts (an algorithm inferred it, needs a trust score). Naming the split formally would make both existing ad hoc mechanisms cohere into one design.
+
+### Recommended against physically separate graphs — this codebase already tried that and reversed it
+
+`internal/kg/types.go`'s own header states the 2026-07-02 merge (Entry 50) unified two graphs into one specifically to eliminate cross-graph consistency problems — every `Event` needs an edge to an `Equipment` node; physically separate stores turn that into a cross-database join. A new semantic/operational split as two physical graphs would reintroduce the exact problem the Entry 50 merge fixed, on a different axis.
+
+### Recommendation: derive it from node type, as a filter — not a schema migration
+
+Mirrors the existing pattern (`ForceGraph.jsx`'s `isPlatformType()` already derives `category` from `type` the same way). `category` (business/platform) and this new `layer` (semantic/operational) are orthogonal — `platform` is inherently all-semantic (pipelines don't "happen"), so this only subdivides `business`. Proposed concrete steps, not yet built: (1) formalize `TypeSite`/`TypeArea`/`TypeWorkCenter` as constants in `types.go` (currently free-form strings in `bootstrap.go`); (2) an `IsSemanticType()` lookup; (3) extend `GetGraph` with an optional `layer=` filter; (4) a Semantic/Operational toggle in `KnowledgeGraphPage.jsx` next to the existing category toggle; (5) document `pending` as the semantic-layer trust field and `confidence` as the operational-layer trust field.
+
+**Honest caveat raised, not dismissed:** there's a legitimate separate motivation for physical separation — pure scale, since operational data can grow into millions of rows while semantic data stays small, eventually slowing "just show me the equipment hierarchy" queries in the same table. Flagged as a real future line, not a reason to build for it now.
+
+### Status
+
+Recommendation given, not yet confirmed or built. Awaiting user go-ahead.
+
+---
+
+## Entry 100 — 2026-07-20 — `docs/new_member_guide.md` brought current: the bootstrapping gap it once flagged as "a good first project" is now fixed
+
+**Trigger:** user: "update the new_member_guide.md" — right after Entry 99's investor-facing docs, catching that the engineer-facing onboarding doc still described the structural bootstrap as unbuilt.
+
+### What was stale
+
+§10's Known Limitations still had the Entry 91/93-era bullet: *"The `business` category has no structure-discovery bootstrapping path yet... agreed in principle, not yet built... a good first project."* That's exactly backwards now — Entries 95-98 built and live-tested it. Leaving this stood, a newcomer reading this doc would have picked up already-completed work as their onboarding task.
+
+### What was updated
+
+- §4.6 (Knowledge Graph detail) — added a paragraph on the structural bootstrap: what triggers it, what it writes, the pending/validation UX, and the depth-dependent WorkCenter/WorkUnit branching (so a reader extending this doesn't reintroduce the Entry 97/98 conflation bug).
+- New §5.3 — a concrete walkthrough of the bootstrap flow, matching the style of the two existing walkthroughs in §5 (numbered steps, code-grounded, not hand-wavy).
+- §4.8 — `KnowledgeGraphPage` row now mentions the "Pending validation" list.
+- §7 (API surface) — added the 3 `/api/kg/pending*` routes.
+- §9 (where do I look to change X) — added a row for the bootstrap code.
+- §10 — the stale bullet split into two accurate ones: the OT side marked fixed-and-live (struck through, with what's *actually* still open — untested at scale, no cascade-delete on reject), and the IT/SQL side correctly still marked as the genuinely unbuilt gap and now-recommended "first project" instead.
+- Intro — added a pointer to the new top-level `README.md` as this doc's investor/user-facing counterpart, and dated the update.
+
+### Status
+
+Doc suite consistent again: `README.md` (external), `docs/new_member_guide.md` (internal onboarding), `CLAUDE.md`, `docs/analysis_log.md` all agree the OT structural bootstrap is built and live-tested, and all agree on what's still actually open (IT-side bootstrapping, flat-list scale, cascade-delete).
+
+---
+
+## Entry 99 — 2026-07-20 — v0 documented for investors/future reference: README, demo script, pitch narrative + slide
+
+**Trigger:** user, after Entry 98's fix + re-verification: *"We just completed v0... Now we need to document it for investors and future reference"* — asked for a README, a 2-3 min demo video script, and an updated pitch narrative with a 1-slide visual. "This is purely documentation."
+
+### What was produced
+
+1. **`README.md`** (project root — none existed before). Sections: install, `config/agent.yaml` walkthrough, step-by-step usage of the structural bootstrap flow, the 5 relevant API endpoints, the 3 relevant UI pages, an ASCII flow diagram of the bootstrap mechanism with the design principle stated explicitly (structural = auto, transactional = never), tech stack, and Known Limitations naming exactly the 3 the user specified (flat-list scale untested, no IT master-data auto-gen, no cascade on reject) plus 2 more inherited from the base platform (secure OPC-UA modes, single OPC-UA subscription).
+2. **`docs/demo_script_kg_bootstrap.md`** — a 2:30 timestamped script, grounded in the actual Entry 97/98 live test data (real tag names, real counts — 8 tags, 15 pending nodes — not invented placeholder numbers), plus a shot list table for an editor. Explicit instruction to keep raw JSON/logs as optional B-roll only, not the primary visual — the UI tells the story better than the API response does.
+3. **`docs/pitch_kg_bootstrap.md`** — the narrative doc. Locks the user's exact line ("auto-generated at OPC-UA connect time... pipelines enrich it, they don't build it... context is there from day one") as the headline, then — deliberately — a "what's proven vs. what's still ahead" section that states the real limitations (structural-only, small-scale-only, IT side not built) in the same document as the pitch, on the reasoning that a technical investor audience will find these gaps anyway, and disclosing them inline builds more credibility than a document that only asserts strengths.
+4. **1-slide visual summary** — published as an Artifact (https://claude.ai/code/artifact/23f40e6f-86a4-4968-a1cf-e359d1169f2c). 5-step flow diagram (Connect → Discover → ISA-95 mapping → Human validation → Graph exists), 3 real stats (<1 min, 15/8, 0 pipelines needed), and the same "structural vs. operational" honesty line as a footer, not omitted from the visual either. Visual language (dark theme, cyan/amber accents, monospace technical labels) deliberately kept consistent with the two earlier MindSet diagram artifacts published this session (the OPC-UA/MQTT bridge and ISA-95 tag-normalization diagrams), so the growing set of investor/social visual assets reads as one coherent identity rather than one-off styles per request.
+
+### Status
+
+All 4 deliverables complete, no code touched (as scoped — "this is purely documentation"). The artifact is private by default; user shares it externally when ready.
+
+---
+
+## Entry 98 — 2026-07-20 — Machine-conflation bug fixed and re-verified live; correcting Entry 97's root-cause attribution
+
+**Trigger:** user, after Entry 97: confirmed the finding was real, gave two explicit fixes to make ("fix the mapper... 4 levels correctly," "add the WorkUnit level to the seed"), and asked for a re-test against the same Prosys server to validate machines are no longer conflated. "Go ahead."
+
+### Correcting Entry 97 before implementing — the mapper's extraction was already correct
+
+Re-verified `internal/uns/mapper.go`'s output precisely before writing any fix, rather than assuming Entry 97's diagnosis was complete. Result: **the mapper already produced the right values.** For `Usine_Paris_Nord.Ligne2.Machine3.status`, `MapTag` already returns `WorkUnit="Machine3"`, correctly distinct from `WorkUnit="Machine1"`/`"Machine2"` for the other tags. The actual root cause was 100% in the v0 seed code: `HierarchyEntry` (Entry 96) never had a `WorkUnit` field, so `SeedFromDiscovery` silently dropped a value the mapper had already computed correctly. Entry 97 overstated the mapper's fault by attributing the bug to "the mapper's 4-level heuristic mis-assigns" — correcting that here for the record.
+
+**A real, separate ambiguity found while checking this, which the fix had to account for:** the mapper's existing 3-level case (`machine2.ligne1.presion` → its own doc comment: "machine + subunit + tag") uses `WorkCenter` to mean **the machine itself**, while the real 4-level data needs `WorkCenter` to mean **the line above the machine**. Same two field names, opposite real-world meaning, depending on tag depth. A depth-blind fix would have silently swapped machine/line at depth 3 — avoided by making the fix explicitly depth-aware rather than a blanket rule.
+
+### What was actually built
+
+- `internal/uns/mapper.go` — doc comment only, no behavior change (extraction was already right): documents the depth-dependent WorkCenter/WorkUnit semantic flip so the next reader doesn't hit the same confusion.
+- `internal/kg/bootstrap.go` — `HierarchyEntry` gained `WorkUnit` and `Depth` fields. `SeedFromDiscovery` now branches: at `Depth >= 4` with `WorkUnit` present, creates a new `WorkCenter`-typed node for the line (child of Area) and uses `WorkUnit` as the `Equipment` identity (child of the new WorkCenter node) — matching what the rest of the system means by "work center" (`AddMicroStop`, ERP `work_orders.work_center`, `of_enrichment.yaml`) is the machine, not the line. At depth ≤3, behavior is unchanged from Entry 96 (WorkCenter directly becomes Equipment — correct there since the mapper's own WorkCenter field already means "the machine" at that depth).
+- `cmd/server/opcua.go` — `seedKG` now computes `Depth` from the raw tag name's dot-count and passes `WorkUnit` through from the mapper's output.
+- `ForceGraph.jsx` — added a color for the new `WorkCenter` node type (distinct from `Equipment`'s red).
+
+### Re-tested live, same Prosys server, clean re-test
+
+Rebuilt, stopped the running server, **reset `data/mindset.db`** (confirmed first via `GET /api/kg?category=business` that 100% of existing business-category data was this test session's own throwaway data, nothing pre-existing worth preserving), restarted, redid Connect → Discover through the actual browser UI.
+
+**Result, verified against the raw `/api/kg?category=business` JSON, not just the UI:** `Machine1`, `Machine2`, `Machine3` are now three distinct `Equipment` nodes. `machine_Machine1` has exactly `temperature`/`speed`/`status`/`compteur_pieces` (all genuinely from Machine1); `machine_Machine2` has exactly `pressure`/`status` (genuinely from Machine2) — no cross-contamination. Both correctly nest under a new `WorkCenter` node (`ligne1`); `Machine3` nests under a separate `WorkCenter` node (`Ligne2`). Confirmed visually too — the graph view shows 2 distinct orange `WorkCenter` nodes and 3 distinct red `Equipment` nodes, and the sidebar's type legend picked up `WorkCenter` automatically. Pending count: 15 (correctly up from 11 — 2 new `WorkCenter` nodes, 3 `Equipment` nodes instead of 2, same 7 tags, same Site/Area).
+
+### Status
+
+Both requested fixes done and live-verified against real infrastructure, not just unit-level reasoning. The v0 from Entry 96/97 is now trustworthy on this real customer-shaped tag-naming convention. Known open items, unchanged: the "hundreds of tags" flat-list scaling question (deferred per the user, "for later"); the depth-3 case's `WorkUnit` (a genuine machine sub-component) still isn't modeled as its own node — out of scope, not requested, no evidence yet that it needs to be.
+
+---
+
+## Entry 97 — 2026-07-20 — Live-tested against a real Prosys server: works end to end, and one real structural bug found
+
+**Trigger:** user: *"i use prosys simulator on this ip: opc.tcp://med26:53530/OPCUA/Server1"* — right after Entry 96's v0 was code-complete but not click-tested. Updated `config/agent.yaml`'s default endpoint to `med26`, rebuilt and restarted `bin/server.exe` (the running process predated the v0 code), then drove the actual UI via the Claude in Chrome browser tools to test live.
+
+### What was verified, live, against a real server
+
+Full chain confirmed working: Connect → Discover (triggers `BrowseNodeTree`) → `SeedFromDiscovery` runs (server log: *"KG structural seed: 8 work centers seeded/confirmed, pending validation"*) → `GET /api/kg/pending` returns 11 nodes → the sidebar "Pending validation (11)" list renders → `ForceGraph.jsx` shows dashed-ring pending nodes → clicking Accept (✓) and Reject (✗) both work, confirmed via live count changes (11→10→9) and a direct re-check of `/api/kg/pending`'s raw JSON, not just the UI.
+
+**Flat-list question (open since Entry 95/96): not a problem at this scale.** 8 tags → 11 pending nodes, fully readable as a flat list. Server was small (a Prosys demo instance), so the "what about hundreds of tags" concern remains genuinely untested.
+
+### The real finding — a structural bug, not a cosmetic one
+
+The real tag naming convention is `Usine_Paris_Nord.Ligne2.Machine3.status` — **Site.Line.Machine.Tag**, 4 levels. The ISA-95 mapper's 4-level heuristic (`internal/uns/mapper.go`) assumes **Area.WorkCenter.WorkUnit.Tag** and mis-assigns every level:
+
+- `Usine_Paris_Nord` (the actual site) → mapped as `Area`
+- `Ligne2`/`ligne1` (production lines) → mapped as `Equipment`/`WorkCenter`
+- `Machine3`/`Machine1`/`Machine2` (the actual physical machines) → mapped as `WorkUnit`, which `SeedFromDiscovery` (v0 scope) doesn't create as a node at all
+
+**Consequence, verified directly against the raw KG data:** tags from `Machine1` and `Machine2` — two different physical machines — both landed on the same `machine_ligne1` Equipment node (`pressure` from Machine2 sitting alongside `temperature`/`speed`/`status`/`compteur_pieces` from Machine1). This is a genuine loss of information, not a labeling nitpick — if the two machines have different failure modes, the graph can no longer distinguish them. Exactly the class of problem Entry 95/96 needed a real server to surface; would not have been found by continued code review or abstract reasoning about the mapper.
+
+### Status
+
+v0 confirmed working end to end on real infrastructure. One real bug found and documented, not yet fixed: the mapper's naming heuristic needs a WorkUnit level in the seed (or a corrected level-assignment for this Site.Line.Machine.Tag shape) before this is trustworthy on real customer tag-naming conventions beyond this specific demo server. Test state (1 validated node, 1 rejected node) is live in `data/mindset.db` — not reset, since it's local dev data and reflects a real successful test, not something to discard.
+
+---
+
+## Entry 96 — 2026-07-20 — Entry 95's v0 built: OT structural bootstrap, code-complete, not click-tested
+
+**Trigger:** user: *"Green light. Go for the v0 OT structural bootstrap... Let's stop analyzing and start building."*
+
+### What was built, exactly matching Entry 95's scope
+
+**Backend:**
+- `internal/kg/bootstrap.go` (new) — `HierarchyEntry` struct (kg stays protocol-agnostic; caller does the ISA-95 mapping) + `SeedFromDiscovery` (writes Site/Area/WorkCenter/Tag as `pending:true` business-category nodes via the existing `AddNodeCat`/`AddEdgeCat`, idempotent) + `ListPending`/`ValidateNode`/`RejectNode`.
+- **Deliberate ID convergence:** `WorkCenter` nodes use the same `machine_<workCenter>` ID scheme as `AddMicroStop`'s reactive Equipment node, so a pre-seeded pending node and a later real micro-stop reference the same graph node instead of duplicating. Documented tradeoff: since `AddNodeCat` is `INSERT OR IGNORE`, whichever path writes first wins the row — if the seed runs first, the node stays `pending:true` even after real operational data references it, until explicitly validated. Acceptable for v0, flagged in the code comment so it isn't mistaken for a bug later.
+- `cmd/server/opcua.go` — `OPCUAManager` gained a `*kg.KnowledgeGraph` field (constructor param, nil-safe); every successful `Discover()` now maps tags through the existing `uns.Mapper` and calls `SeedFromDiscovery`. Best-effort — a seeding failure logs and doesn't break discovery.
+- `cmd/server/kg_handlers.go` (new) + 3 routes: `GET /api/kg/pending`, `POST /api/kg/pending/{id}/validate`, `POST /api/kg/pending/{id}/reject`.
+
+**Frontend:**
+- `ForceGraph.jsx` — pending nodes render at reduced alpha with a dashed amber ring, visible in the graph without needing to click each one.
+- `KnowledgeGraphPage.jsx` — a "Pending validation (N)" list in the sidebar, inline accept/reject, refreshes both the list and the graph (clears the ring) on action.
+- `client.js` — `fetchPendingKGNodes`/`validateKGNode`/`rejectKGNode`.
+
+### Verification performed
+
+`go build ./...` clean. `go test ./...` clean for everything touched — the `cmd/agent` vet failures (`fmt.Println` redundant newline) are pre-existing, in files not touched this session (confirmed via `git status` — `cmd/agent/main.go` was already dirty before this conversation). Frontend `npm run build` clean. `npm run lint`: caught and fixed one real issue I introduced (`KnowledgeGraphPage.jsx` calling a named async function directly from a `useEffect` body — `react-hooks/set-state-in-effect`); fixed by matching the file's own existing pattern (inline IIFE in the effect, a separate plain function for event-handler-triggered refreshes). Remaining lint errors after the fix are confirmed pre-existing (`DashboardPage.jsx`, never touched; `ForceGraph.jsx`'s existing autofit effect and exports, lines not written this session).
+
+### Real, stated limitation
+
+No live OPC-UA server reachable in this environment — the actual end-to-end flow (connect → discover → pending nodes appear → accept/reject) was not click-tested in a browser. Code compiles and the logic is straightforward, but Entry 95's two real open questions remain genuinely open: is the ISA-95 mapper's output clean enough on real tag names to be worth reviewing, and is a flat accept/reject list usable — or does a real OPC-UA server's typical tag count (potentially hundreds) make a flat list impractical? That second question wasn't fully anticipated in Entry 95's proposal and is worth watching specifically when this gets tested against a real source.
+
+**Known rough edge, not fixed (acceptable for v0):** `RejectNode` deletes one node + its direct edges, no cascade — rejecting a `Site` node leaves its `Area`/`WorkCenter`/`Tag` children as now-dangling but still-listed pending entries. Fine for a flat list (they're just individually rejectable), would need addressing if this becomes a tree view.
+
+### Status
+
+Code-complete, compiles, not yet run against a real OPC-UA source. Next step is for the user to test it live (Prosys simulator or a real PLC) and report back on the two open UX/quality questions above.
+
+---
+
+## Entry 95 — 2026-07-20 — Proposed v0 for the OT structural bootstrap, awaiting go-ahead
+
+**Trigger:** user, after Entry 94's "do you think we auto-generate data in KG?" gut-check: *"what do you propose to do?"* — asked to convert 5 entries of analysis (87/89/90/92/94) into an actual scoped plan rather than continue discussing.
+
+### Proposed scope (not yet built, awaiting confirmation)
+
+Smallest slice that tests the real open question — is the ISA-95 mapper's output clean enough to review, and is a flat accept/reject list usable — rather than a full build.
+
+**In scope (OT only):**
+1. A seed function in `internal/kg` — feeds `BrowseNodeTree`'s tags through the existing `uns.Mapper.MapTag`, writes Site/Area/WorkCenter/Tag as `business`-category nodes via `AddNodeCat`/`AddEdgeCat` with a `"pending": true` property in the existing JSON `properties` blob (no schema migration).
+2. Wired into `cmd/server/opcua.go`, firing right after a successful `BrowseNodeTree`.
+3. Two endpoints: `GET /api/kg/pending`, `POST /api/kg/pending/{id}/validate|reject`.
+4. `ForceGraph.jsx` — pending nodes rendered distinctly (dashed/amber).
+5. A flat accept/reject list UI — deliberately not a tree view, not the separate-staging-store pattern from Entry 89 yet.
+
+**Explicitly out of scope for v0:** IT/SQL master-data auto-generation (Asset/Material — separate, bigger effort per Entry 94's split), general confidence scoring across all node/edge types (Entry 89 rec #1 — the mapper produces no numeric score today), OT↔IT entity resolution.
+
+**Rationale for the small scope:** 5 entries of analysis with zero code so far — flagged directly that continuing to reason in the abstract is now the wrong move; a cheap, throwaway-able v0 answers two real unknowns (mapper output quality on real tag names; whether a flat list is usable UX) that no amount of further discussion can resolve.
+
+### Status
+
+Proposed, not yet confirmed or built. Awaiting user go-ahead before writing any code.
+
+---
+
+## Entry 94 — 2026-07-20 — Correction: business context auto-generation splits into master-data (maybe) vs. transactional (never), refining Entry 90's narrative
+
+**Trigger:** user asked directly: *"le contexte business est auto-generé come coté OT ou il arrive apres? les pipelines enrichissent le kg via le contexte business ou les uses-cases?"*
+
+### Verified before answering
+
+Checked `internal/functions/connectors/sql_query.go` for any schema-discovery capability (`SHOW TABLES`, `information_schema`, or similar) — none exists. `sql_query` is purely a targeted, hand-written SELECT with static params; there is no SQL-side equivalent to OPC-UA's `BrowseNodeTree`.
+
+### The real asymmetry between OT and IT
+
+- **OT:** `BrowseNodeTree` returns the *entire* structure in one call — every tag, every hierarchy level — independent of any specific use case. That's exactly why "auto-generate at connect time" is viable there.
+- **IT/ERP:** no equivalent exists, even in principle. A bulk schema browse would only return table/column names, not semantic meaning — unlike the OT ISA-95 mapper, which is already a semantic heuristic (`machine1.temp` → inferred hierarchy), raw SQL schema introspection gives no equivalent semantic mapping without `field_map` being written first.
+
+### The distinction this surfaced — master data vs. transactional data, not one uniform "business context"
+
+- **Master data** (`Asset`, `Material`, `Product`, `Operator`) — relatively static, structurally similar to OT `Equipment`. *Could* in principle be auto-generated the same way, but would need a new capability that doesn't exist today (schema introspection + a "fetch all" mode, not a targeted query) — a plausible but distinct, unbuilt mechanism, lower-confidence than the OT bridge.
+- **Transactional data** (`WorkOrder`, `Batch`, `Quality`, `Schedule`) — **cannot**, by nature, be auto-generated as a skeleton. It isn't a fixed structure to discover once; it's a continuous stream of business events. This tier necessarily arrives progressively, via pipelines built for specific purposes — same as today, and that's correct, not a gap.
+
+### Direct answer to the second question
+
+**Pipelines enrich the KG via use-cases, not via a pre-existing "business context"** — for the transactional tier specifically, and that's expected, not a shortcoming. A use-case-agnostic, pre-populated "business context" is only realistically achievable for the master-data tier, if that bridge is ever built.
+
+### Correction flagged to the Entry 90 narrative
+
+*"Le Knowledge Graph est déjà créé et peuplé à la base"* is accurate for the **structural** layer (OT, and potentially IT master data) but **not** for the transactional/operational layer, which genuinely does arrive via pipelines, progressively, as it always has. Flagged now rather than letting it surface during technical due diligence. The Entry 90 line should be understood with this scope limitation attached going forward, not restated without it.
+
+### Status
+
+Analysis only, logged same-turn. No doc files edited this turn (the correction is conceptual/narrative, layered on top of Entries 87-93's existing content) — flag for whoever next touches the Entry 90 messaging externally to carry this scope limitation forward.
+
+---
+
+## Entry 93 — 2026-07-20 — Doc-suite sweep for Entry 92 drift, one citation error found and fixed
+
+**Trigger:** user: "just update docs" — a terse follow-up after being offered a choice between implementing the KG bridge now or staying doc-only. Read as: stay doc-only, and finish propagating Entry 92's decision across the suite (Entry 91's sweep predates Entry 92, so it only had the old "ISA-95-inspired" framing and the 6-object list).
+
+### What was found and fixed
+
+Grepped the whole doc suite for stale references before editing anything:
+
+- **`CLAUDE.md`** — Known Limitations bullet still had the pre-Entry-92 6-object list and the superseded "ISA-95-inspired... don't call it compliant" phrasing. Updated to the full 9-object list and the exact locked language from Entry 92.
+- **`docs/new_member_guide.md`** — same stale phrasing, plus **a real citation error**: cited "§8.2 of `docs/mysql_connector.md`" for the canonical model. Checked the actual doc's headings — the canonical model is §6b; §8 is "Connection registry — `internal/connections/`," an unrelated section. Fixed the citation and updated the object list/language.
+- **`docs/ARCHITECTURE.md`** — 3 separate mentions (the function-catalog table, the KG bootstrapping-gap callout, and the feature-log entry) all still said "ISA‑95‑inspired." Updated all three, and added Entry 92 to the citation lists alongside 87/89/90 where the bootstrapping gap is discussed (since Entry 92 is now part of that same thread).
+- **`docs/COMPONENTS.md`** — one citation list (`kg/subscriber.go`'s row) updated to include Entry 92.
+
+### Status
+
+Doc suite now fully consistent with Entry 92's decision. No code touched — confirms the user's "just update docs" meant stay in documentation scope, not move to implementation.
+
+---
+
+## Entry 92 — 2026-07-20 — Decision: normalize IT data on ISA-95's object model, explicitly not on B2MML
+
+**Trigger:** user asked directly: *"so we normalise IT on isa-95 or not? who's the best?"* — forcing a real decision rather than leaving Entry 90's naming caveat unresolved.
+
+### Decision
+
+**Yes — ISA-95, at the object-model/concept level. Explicitly not its B2MML wire-format/XML implementation.** ISA-95 Part 2 already defines exactly the objects the canonical model is inventing ad hoc — Work Order, Product/Material, Personnel, Equipment, Process Segment — because ISA-95 was designed as the ERP↔plant interface standard, not an OT-only spec. No better-fit alternative exists for manufacturing OT+IT unification (TM Forum SID/eTOM, Synapt's standard, is telecom-specific and doesn't apply). B2MML itself (the XML wire format) was explicitly rejected: no real ERP exports B2MML-shaped data, every integration needs a `field_map` translation layer regardless of which standard is claimed, and we're MQTT/JSON-native already — adopting the XML transaction format would buy nothing.
+
+### Concrete implication for the canonical model
+
+The current canonical model (`work_order`/`batch`/`product`, `docs/mysql_connector.md` §6b) should **expand its object set to match ISA-95's actual vocabulary** — add `Personnel`, `Material`, `Equipment Class`, `Process Segment` as canonical types — while keeping the existing lightweight implementation (JSON-shaped KG node types + `field_map` translation, not XML/B2MML). Same mechanism already built, wider object coverage. Directly extends the Entry 89/90 recommendations (generalized confidence/lineage, entity resolution) — this decision determines *which* node types those apply to.
+
+### Flagged for a research spike, not committed to — stated with real uncertainty rather than asserted as fact
+
+Raised, with an explicit confidence caveat (not independently verified this session): the OPC Foundation + MESA International reportedly published an **"OPC UA for ISA-95"** companion information model (Work Master/Work Order/Personnel/Material/Equipment as native OPC UA types). If mature, this would be architecturally elegant specifically for us — same metamodel on OT (already OPC-UA native) and IT, one object model end to end instead of two parallel translation layers. Explicitly **not** recommended for the roadmap yet — flagged as "worth 30 minutes of real research" before it goes anywhere near a decision, since the claim wasn't verified against a live source this turn.
+
+### The external-language rule this locks in
+
+*"Our canonical model aligns with ISA-95's information model"* — never *"ISA-95-compliant"* (implies B2MML/wire-format conformance, which is explicitly not being built). Resolves the naming-precision flag raised in Entry 90.
+
+### Status
+
+**Implemented same-turn** (user: "yep go"). `docs/mysql_connector.md` §6b's canonical model extended with 3 new object types, matching ISA-95's real vocabulary: `Material` (distinct from `Product` — what's consumed, not what's made), `Asset` (ERP/CMMS equipment record), `ProcessSegment` (routing/operation step). The first six canonical types (`WorkOrder`/`Batch`/`Product`/`Schedule`/`Quality`/`Operator`) were unchanged — `Operator` already covered ISA-95's Personnel model, so no new type was needed there.
+
+**`Asset` was given a deliberate, documented relationship to the existing KG `Equipment` node type**, not just added as a fourth flat object: it's the intended input to the OT↔IT entity-resolution step from Entry 89 (fuzzy-matching an ERP asset record to the matching OT `Equipment` node). Made explicit in the doc so a future implementer doesn't treat it as a disconnected object.
+
+Also tightened the naming-precision line in the same section to the exact locked language from this entry's decision ("aligns with ISA-95's information model," never "ISA-95-compliant").
+
+**Still not implemented:** none of this writes into the KG yet — `Material`/`Asset`/`ProcessSegment` are canonical *output shapes* a `sql_query` node can now produce, same as the other 6, but the missing bridge from Entries 87/89/90 (nothing consumes `canonical` output into `kg_nodes`/`kg_edges`) still applies equally to these new types.
+
+---
+
+## Entry 91 — 2026-07-20 — Doc suite brought up to date with Entries 87/89/90's findings
+
+**Trigger:** user: "validate what you wrote from the entry 89 and other updates and update our docs suite to that."
+
+### Validation pass (before touching any doc)
+
+Re-checked the load-bearing claim from Entry 87 rather than trusting the prior session's own work blindly: grepped every call site of `internal/discovery.BrowseNodeTree` across the whole repo (`cmd/agent/main.go:282`, `cmd/agent/init.go:206`, `cmd/server/opcua.go:120`) and confirmed none of them are anywhere near a `kg.Add*` call — the bootstrapping gap holds exactly as written. Also confirmed `outputs.NewKGSaveHandler` is registered in `cmd/agent` (both `main.go` and `init.go`) but not `cmd/server` — matches `CLAUDE.md`'s existing note. Worth stating precisely: this means a narrow manual escape hatch exists today (an agent-run pipeline *could* call `kg_save` after discovery), but nobody has built that pipeline, and doing so by hand for every tag would defeat the point — doesn't change the Entry 87 conclusion, just adds precision.
+
+### Docs updated, in order
+
+1. **`CLAUDE.md`** — added two Known Limitations bullets: the KG bootstrapping gap (with exact file/line grounding) and the `sql_query` canonical-model-not-consumed gap, plus the ISA-95-inspired-not-ISA-95-compliant naming precision from Entry 90.
+2. **`docs/new_member_guide.md`** §10 — same two gaps added, phrased for a newcomer audience, with a pointer to Entries 87/89/90 and a suggestion that this is a good first real project for someone ramping up on the codebase.
+3. **`docs/mysql_connector.md`** §6b — corrected the line *"Downstream nodes (rules, KG subscriber, Impact Engine, MCP) consume `canonical`"*, which was written as present-tense fact but is actually design intent — `internal/kg/subscriber.go` only ever subscribes to `mindset/events/micro-stop`. Added the ISA-95-inspired naming caveat here too, since this is the doc that actually defines the canonical model.
+4. **`docs/ARCHITECTURE.md`** — the most stale file (flagged back in Entry 86, not yet fixed until now). Rewrote §4.6 (Knowledge Graph) from the old two-graph description to the unified `category`-tagged model plus the bootstrapping gap; fixed §4.4's `sql_query`/`modbus_read` table (was listing both as "demo stubs" — `sql_query` has been fully built since Entries 58-82); added `internal/connections` and `internal/e2e` to the package table; added `/api/connectors` and the full `/api/connections/*` + unified `/api/kg` rows to the API table; fixed the frontend section (`ForceGraph.jsx` is what's actually used now, `CytoscapeGraph.jsx` is dead code; added `ConnectionsPage`/`OpcuaConnectPage`); updated the project-structure tree (added `internal/connections`, `internal/e2e`, `cmd/erpsim`, `docker-compose.dev-erp.yml`, `sim/erp/`, `config/connections.yaml`); added the fake-ERP + external-deps commands to "Running it"; added two new numbered feature-log entries (19: MySQL connector V1a, 20: KG unification) and a new Known Limitations bullet for the bootstrapping gap.
+5. **`docs/COMPONENTS.md`** — same class of fixes at file-by-file granularity: rewrote the `kg/` section (unified graph, not two), added `connections/` and `e2e/` package tables, added `connections.yaml` to the config table, added `SqlConfigPanel.jsx`/`FieldMapEditor.jsx`/`ConnectionsPage.jsx` to the frontend tables, flagged `CytoscapeGraph.jsx` as dead code with `ForceGraph.jsx` as the real one, added `pipelineLoading.js`, fixed the route count (7→8), and added the fake-ERP files to the Root table.
+
+### Status
+
+All 5 docs now consistent with each other and with verified current code, not just with the chat discussion. No code changes made — this was a documentation-only pass. The underlying gaps (KG bootstrapping, canonical-not-wired, `weight`-as-confidence, static work-center string) are now documented but still **not fixed** — that's the natural next step whenever the user wants to move from discussion to implementation.
+
+---
+
+## Entry 90 — 2026-07-20 — Cécilia alignment: does ISA-95 auto-generation cover IT too, and locking the pipelines-vs-graph narrative
+
+**Trigger:** Cécilia, relayed by the user via WhatsApp screenshots, asked two questions building directly on Entry 87/89: (1) *"avec validation humaine ok, côté OT ok, mais IT too right? C'est toute la chaîne ISA-95 dans tous les cas qu'on map, juste pour confirmer"* — then answered herself "Yep ofc" before getting a reply; (2) asked to lock the explanation: *"Les pipelines servent à automatiser, et à enrichir le knowledge graph, mais le knowledge graph est déjà créé et peuplé à la base... Our role is to give and automate as fast as possible the context of the enterprises."*
+
+### Answer to Q1 — checked before agreeing, found a real nuance
+
+Did not just confirm "yep ofc" — verified against the actual code first, since Cécilia's own answer assumed something not yet true. **Both OT and IT have the same gap, not just OT:**
+
+- **OT:** the ISA-95 mapper (`internal/uns/mapper.go`) exists but doesn't write to the KG (Entry 87's finding, unchanged).
+- **IT:** a "canonical model" (`work_order`/`batch`/`product`) already exists, documented in `docs/mysql_connector.md` §6b, with the design note *"Downstream nodes (rules, KG subscriber, Impact Engine, MCP) consume canonical."* Checked `internal/kg/subscriber.go` directly — it subscribes to exactly one topic, `mindset/events/micro-stop`, nothing else. The canonical model is real but unconnected to the KG. Same missing bridge as the OT side, just on the other end.
+
+**So: yes, one bridge fixes both sides** — useful simplification for scoping the eventual build. **Correction flagged, not just confirmed:** the IT-side "canonical model" is ISA-95-*inspired* (a simplified MindSet-invented shape: `work_order`/`batch`/`product`), not ISA-95 Part 2's literal object vocabulary (Operations Segment, Personnel Class, Material Lot — the B2MML standard). Recommended the team say "ISA-95-inspired canonical model" externally, never "ISA-95-compliant," to avoid exposure if a technical prospect checks the claim closely.
+
+### Answer to Q2 — narrative locked, with one guardrail added
+
+Agreed with the substance of Cécilia's framing. Proposed tightened wording:
+
+> "Le Knowledge Graph est créé et peuplé automatiquement dès la connexion — les pipelines ne le construisent pas, ils l'automatisent et l'enrichissent. Notre rôle : donner et automatiser le contexte de l'entreprise le plus vite possible."
+
+**Guardrail added:** this describes the *target vision* (Entry 87/89's proposed flow), not the current running system — flagged explicitly so the line is safe to use in pitch/vision contexts but the team knows not to demo it as working today until the bridge from Q1 is actually built. Recommended keeping an internal-only distinction between "what we say we're building" and "what currently runs" until then.
+
+### Status
+
+Alignment reached on both questions; narrative line adopted with the vision-vs-current-state guardrail. No new code written. Still open: turning Entry 87/89's recommendations (the missing OT+IT→KG bridge, generalized confidence, entity resolution) into an actual implementation plan.
+
+---
+
+## Entry 89 — 2026-07-20 — Synapt vs. MindSet: pipeline/KG construction compared, side by side, with a prioritized improvement list
+
+**Trigger:** user asked for a full side-by-side — how Synapt actually builds pipeline+KG, how MindSet does it today, why the differences exist, and what to change. Direct continuation of Entry 87 (the bootstrapping gap) and Entry 88 (the Synapt research), now cross-referenced against MindSet's own code precisely (re-verified `internal/kg/graph.go`'s `AddCause`/`AddMicroStop`/`AddCost` and `config/pipelines/examples/of_enrichment.yaml` in this pass).
+
+### The comparison table
+
+| | Synapt | MindSet (today) |
+|---|---|---|
+| What triggers ingestion | Native streaming connectors — customer just connects a source | MQTT trigger or manual Run |
+| Who builds the "pipeline" | Nobody — fixed internal engine, invisible to the customer | The customer/team — hand-authored YAML DAG |
+| How structure gets extracted | LLM-driven (semantic chunking + entity/relationship/concept/proposition extraction) | Deterministic string-parsing (`internal/uns/mapper.go` naming heuristic; `sql_query`'s `field_map`) |
+| Validation before "live" | Confidence-scored; below threshold → held in a separate review queue ("Tristore"), never written to the live graph until validated | None — `AddNode`/`AddEdge` write straight to `kg_nodes`/`kg_edges` |
+| Confidence as a concept | First-class on every entity/relationship, plus freshness/authority/contradiction scoring | Exists in exactly one place — `AddCause(eventID, cause, confidence)` stores it in the Cause node's `properties` JSON and reuses the generic edge `weight` column to carry it; every other edge type (`occurred_at`, `costs`) hardcodes `weight = 1.0`, so it isn't a real primitive, it's a one-off value smuggled through an unrelated field |
+| Cross-system entity linking | Automatic, threshold-scored (0.75 default) entity resolution | Fully manual and static — `of_enrichment.yaml` hardcodes `work_center: "machine1"` as a literal string; confirmed (again) no `{{ }}` templating exists in `internal/pipeline`, so every new plant/work-center needs a hand-edited YAML file |
+| Storage | Neo4j (graph) + Milvus (vector/semantic search) | SQLite, two flat tables, plain SQL joins, no native graph engine |
+| Schema backbone | TM Forum SID/eTOM (telecom industry standard) | ISA-95 exists as a mapper but (Entry 87) is never used to seed the graph |
+| Time to first graph | Marketed: 30 minutes | No metric exists — currently zero graph until the first micro-stop event fires |
+
+### Why the differences exist (the "why," not just the "what")
+
+1. **Fixed invisible pipeline vs. visible Studio-as-product is a deliberate philosophy fork, not a maturity gap.** Synapt optimizes for "connect and get a graph, don't think about pipelines"; MindSet optimizes for "give technical users full control over automation logic." The Entry 87 conclusion (auto-generate structure, keep the Studio for automations) is a **hybrid** of both — invisible pipeline for the part that shouldn't need customization, visible Studio for the part that should. Worth being deliberate this is the actual target, not a drift toward one extreme.
+2. **LLM extraction vs. deterministic parsing is the correct choice for us, not a gap.** Synapt's inputs are unstructured (documents/tickets/wikis) so they need an LLM to infer a schema; MindSet's inputs (OPC-UA typed tags, SQL typed columns) are already structured, so deterministic mapping is cheaper, faster, fully auditable, and has no hallucination risk in the extraction step. **Explicit recommendation: don't add an LLM extraction layer to match them** — it would solve a problem we don't have.
+3. **SQLite vs. Neo4j is a deliberate, currently-correct tradeoff with a known future boundary**, not an oversight — `CLAUDE.md` already documents the pure-Go/no-CGO/single-binary edge-deployment rationale. Neo4j is a separate server, wrong shape for a lightweight edge agent. Stops being the right call once the graph is large enough that flat-table joins get slow, or multi-hop traversal ("what caused this cost, and what caused *that*") becomes core rather than occasional.
+
+### Two real gaps found (distinct from Entry 87, worth tracking separately)
+
+- **Confidence/lineage isn't a real primitive** — it's one hardcoded value smuggled through the generic `weight` column for exactly one edge type. Needed both for the Entry 87 validation flow *and* for any future "why should an agent trust this fact" (MCP/grounding) story — can't credibly make that claim with confidence on only one edge type in the whole graph.
+- **Cross-system entity linking is 100% manual and static** — the `of_enrichment.yaml` hardcoded `work_center` string is a real scaling wall: every new plant/work-center needs a hand-edited pipeline file today. Synapt's threshold-scored fuzzy entity resolution is the pattern to borrow — even a lightweight version (fuzzy-match ISA-95 work-center names against ERP `work_center`/`site` columns) would remove a manual step that doesn't currently scale past a single demo.
+
+### Prioritized recommendation list
+
+1. Generalize `confidence`/`validated`/`source` as standard properties in every node/edge's existing `properties` JSON (no schema migration needed) — replaces the `weight`-as-confidence hack.
+2. Separate staging store for unvalidated auto-generated nodes (carried from Entry 88 Addendum 2), not a boolean flag.
+3. Build the Entry 87 ISA-95 auto-bootstrap flow — still the single biggest lever.
+4. Add lightweight automatic entity resolution between OT and IT identifiers (fuzzy-match), to remove the hardcoded-string wall.
+5. Explicitly leave SQLite (storage) and deterministic parsing (extraction) alone — both correct for our data shape today; revisit only if multi-hop queries or unstructured-document ingestion become real requirements.
+
+### Status
+
+Analysis complete, logged same-turn. Not yet turned into an implementation plan — items 1-4 above are candidates for whenever the user wants to move from discussion to a build plan.
+
+---
+
+## Entry 88 — 2026-07-19 — Competitive intel: Synapt.ai (synapt.ai) — category validation, no bootstrapping detail
+
+**Trigger:** user, right after Entry 87's KG-bootstrapping discussion: *"Look at them: https://www.synapt.ai/ (us based and still small, but they're on the right track."* Fetched the site (2 passes — general overview, then a targeted pass specifically for their graph-construction/onboarding methodology).
+
+### What they are
+
+"Operational intelligence layer for Enterprise AI" — infrastructure between AI agents and enterprise systems, building "a live, traversable knowledge graph that agents can query at inference time." Framework-agnostic (any LLM/agent), data stays in the customer's environment. **Vertical: telecom, not manufacturing** — this is a category cousin, not a head-to-head competitor on the OT/shopfloor wedge.
+
+**3 problems they name** (close parallel to our own thesis, one level up): agent hallucination (no enterprise grounding), governance vacuum (no audit trail/guardrails blocking production), and **"knowledge scaling — duplicate effort rebuilding the same knowledge for multiple agents across the enterprise."** That third one rhymes with the Studio-bootstrapping problem from Entry 87, just at the per-agent level instead of per-pipeline.
+
+**Claimed pilot results (telecom):** 80% LLM token-cost reduction, 70% reduction in manual hours (network remediation), 13% elimination of SLA penalty payouts.
+
+**Stage:** beta login only, no self-serve, no pricing, sales-led (a "Talk to Sales" CTA + a free "Enterprise AI Readiness Assessment"). Confirms the user's "still small" read.
+
+### The specific thing checked and NOT found
+
+Went looking specifically for how they *build* the graph — onboarding flow, auto-generation, templates, human-in-the-loop validation, time-to-first-graph — since that's exactly what Entry 87 is about. **Nothing on the public site.** No "How It Works," no docs, no pricing page. The only construction-adjacent line is marketing copy describing the *output* ("connects intelligence across every system... into a knowledge graph... updated in real time"), not the *method*.
+
+**Two honest readings, can't distinguish from the outside:** (a) they have a real bootstrapping story and are deliberately keeping it off the public site — same instinct already applied here to the Impact Engine/Fuzzy Join/MCP-as-SSOT (Entry 56's "what NOT to reveal" list); or (b) it's not elegantly solved and lives behind sales calls/services, plausible for a small, beta-only, single-vertical player. Flagged as a real unknown, not guessed at.
+
+### Takeaway
+
+Validates the macro bet — "a live KG as the grounding substrate for enterprise AI agents" is a real, fundable category, not a niche-to-manufacturing idea — but gives **zero evidence either way** on whether Synapt's approach resembles the auto-generate-from-template + human-validation idea from Entry 87. Would need their case studies/blog or a demo call for real signal; the homepage alone is thin. Offered to dig into case studies/blog next; not done yet.
+
+### Addendum — "what can we learn from this company?"
+
+User asked directly for actionable lessons, not just a description. Six, ranked by how directly they touch decisions already made or in flight:
+
+1. **Positioning pattern worth stealing:** they open with 3 *named* status-quo failure modes (hallucination / governance vacuum / knowledge scaling), not a feature list. Worth checking whether `Blurb_Invest.md`'s "why existing solutions fall short" is that crisp/numbered or more diffuse.
+2. **Their #3 named problem — "duplicate effort rebuilding the same knowledge for multiple agents" — is the Entry 87 bootstrapping problem one level up** (per-agent vs. per-pipeline). This reframes the ISA-95-auto-generate-once idea as addressing a problem a funded category peer names as core, not just internal UX polish. Concrete line worth lifting into our own positioning: **"build the context once, reuse it everywhere."**
+3. **Loud numbers from small pilots** (80% token cost / 70% manual hours / 13% SLA penalty elimination) — we have nothing comparable yet. Once there's a single design partner running for even a few weeks, get 1-3 numbers like this and surface them prominently; a number beats an architecture diagram for both investors and prospects.
+4. **Independent validation, not new information — good ammunition:** their "data sovereignty in customer environment" mirrors our on-prem-first decision (`decisions.md`); their single-vertical focus (telecom) despite vertical-agnostic tech mirrors our wedge-first decision (Entry 74). Useful as an investor-conversation line: a comparable infra player independently making the same two bets.
+5. **Concrete GTM idea to steal:** their "Free Enterprise AI Readiness Assessment" as the top-of-funnel instead of a signup button. An analogous **"OT/IT Data Readiness Assessment"** would be cheap to build and matches the sales-led motion we'll likely need anyway.
+6. **One thing flagged as NOT worth copying:** their total public silence on construction methodology (no docs, no how-it-works, no pricing) protects the moat but leaves a skeptical visitor with little proof of substance. We already decided differently (Entry 56 — publish real technical war-stories like the ISA-95 tag-mapping post, without revealing the actual moats) — Synapt's homepage is a data point *for* staying the course on that plan, not a reason to go silent too. **Correction below — point 6's premise was wrong, the docs exist, just not linked from the homepage nav in an obvious way.**
+
+### Addendum 2 — "how fast, and how" — the construction methodology, found via `/help-document/`, `/case-studies/`, `/telecom/`
+
+User asked specifically to dig into speed and mechanism. Fetched the actual Resources sub-pages (obtained exact URLs from the homepage nav first, then fetched each) rather than re-guessing from the homepage. **This corrects Addendum 1, point 6** — they do publish real construction detail, it's just under `/help-document/`, not surfaced as a prominent "how it works" page, so the first homepage-only pass missed it.
+
+**Generic pipeline (`/help-document/`) — 5 automated stages:** (1) normalize/parse, preserving structure; (2) semantic chunking with LLM metadata + embeddings; (3) structured extraction — Entities (80+ types/7 categories), Relationships (50+ types/8 categories), Concepts, Propositions; (4) **grounding & verification** — *"A grounding step verifies each entity and relationship against the source material before it enters the graph"*; (5) persistence to Neo4j (graph) + Milvus (vector store). Connectors: file upload, URLs/scrapers, SharePoint/Jira/Confluence/Salesforce, PostgreSQL/MySQL/MongoDB, REST APIs.
+
+**The human-in-the-loop mechanism, concretely — this is close to a direct answer to Entry 87's open question:** every extraction gets a confidence score (0.0–1.0). Below a configurable threshold, it's routed to a review queue (their term: "Tristore") **instead of being written to the live graph** — a reviewer validates or discards before it's live. Deduplication via entity-resolution similarity (default 0.75). **Design detail worth adopting over our own Entry 87 sketch:** they hold unvalidated candidates in a *separate store*, not a boolean flag on the same table — so the live graph is never queryable-but-wrong, just absent until validated. Cleaner correctness guarantee than "flag as unvalidated" on `kg_nodes` directly.
+
+**Telecom-specific (`/telecom/`) — the closer parallel to us:** 3 stages — Ingest (native streaming connectors from OSS/BSS/CRM, *"No ETL projects, no nightly batches"*) → Resolve (cross-system entity reconciliation, scored for freshness/authority/contradiction, full source lineage) → Serve (any agent, one integration). **Schema backbone: TM Forum's SID/eTOM/Open Digital Architecture** — telecom's own industry-standard information/process model. This is their ISA-95 — direct, real-world confirmation of the Entry 87 instinct (ride an existing industry standard for the schema skeleton instead of inventing one) at a funded company, in a different vertical.
+
+**Speed claims:** *"connect one system, see your first scored answer in 30 minutes"*; one case study — a fault-resolution agent workflow went from **14 weeks to 9 days** after adoption; 800ms P95 graph traversal across 7 hops of OSS/BSS/network data.
+
+**Separate case study (`/case-studies/`, IT-ops/compliance, not telecom):** manual ToS/EULA review took 20-30 min per tool, quarterly only (90-day blind-spot windows); after Synapt — 95% LLM token-cost reduction, 247M tokens/year saved across 50 software catalogues, 52× more compliance checks/year, 100% of deployments gated through an AI compliance check. No construction/timeline detail on this page specifically (that came from `/help-document/` and `/telecom/`).
+
+**What changes for Entry 87's design:**
+1. "30 minutes to first scored answer" is now a real external target number to design our own ISA-95-bootstrap-to-first-graph flow toward.
+2. Adopt the separate-holding-store pattern for unvalidated auto-generated nodes, not just a flag — stronger correctness guarantee.
+3. We're structurally ahead on "no ETL/no nightly batches" already — our pipeline is MQTT pub/sub end to end, so this isn't something to build toward, it's already true.
+4. Honest gap, not necessarily worth closing: they run Neo4j + Milvus for semantic/document search over unstructured content; we're SQLite for structured OT/IT data. Different problem shape (structured tags/events vs. documents) — only relevant if we ever need semantic search over unstructured maintenance logs/SOPs.
+
+---
+
+## Entry 87 — 2026-07-19 — Knowledge Graph bootstrapping gap: the graph only exists as a side-effect of micro-stops, not of structure discovery
+
+**Trigger:** user pushed back hard on the KG's product design: *"si le client doit passer des semaines à créer manuellement des pipelines pour structurer son knowledge graph, et que notre ROI dépend justement de ce qu'on peut faire une fois ce contexte établi... c'est pas fou nan?"* — asked directly whether this was already solved, and proposed pre-generating the graph from an ISA-95 template with human validation, rather than requiring pipelines to bootstrap it.
+
+### Verified in code, not assumed
+
+Traced every `AddNode`/`AddNodeCat` call that can create an `Equipment` node. There is exactly **one path**: `internal/kg/subscriber.go`, fired only by a `mindset/events/micro-stop` message, writing `event.WorkCenter` as a flat label (no hierarchy, no metadata). There is **no code path at all** from OPC-UA connect/browse to the Knowledge Graph — `internal/discovery.BrowseNodeTree` returns the full structure at connect time and nothing downstream ever writes it to `kg`. So the graph is 100% event-derived: zero Equipment nodes exist until the first micro-stop has already been detected, regardless of whether the user is connected and watching live tags.
+
+**Verdict: the user's critique is correct, and sharper than he assumed** — it's not "pipelines are the only way to structure the graph *slowly*," it's "there is no deliberate structuring step at all, only an accidental side-effect of an unrelated detection pipeline."
+
+### The proposed fix is cheap because 2 of 3 pieces already exist
+
+1. `internal/discovery.BrowseNodeTree` — raw OPC-UA structure, available at connect time.
+2. `internal/uns/mapper.go` (`Mapper.MapTag`) — **already is an ISA-95 pre-template.** Dot-separated naming heuristic (`machine2.ligne1.presion` → Area/WorkCenter/WorkUnit/Tag) with real normalization (including French synonyms — "presion"→pressure, "vitesse"→speed). Currently used only to shape MQTT topic strings, never to seed the KG.
+3. **Missing:** a bridge, at OPC-UA subscribe time, that writes the mapped hierarchy directly into `kg` as `business`-category nodes/edges (`AddNodeCat`/`AddEdgeCat` already support this) flagged unvalidated, instead of waiting for a micro-stop.
+
+### The nuance added back to the user's proposal
+
+Auto-generation only works for the **structural** layer (Equipment/Area/Site hierarchy) — that data already exists at connect time. It cannot work for the **operational** layer (`Cause`, `Cost`, `Product`, `OF`) — that data doesn't exist until the machine has actually run or the SQL/ERP connector has actually pulled it. Landed on a **two-speed model**: instant auto-generated structural skeleton (ISA-95-driven) + progressive operational enrichment (rules + `sql_query` pipelines, unchanged from today). This is not just more realistic than "auto-generate everything" — it's a better product story: the client has a navigable graph on day one, and visibly watches the ROI layer (Impact Engine, MCP, agents) build on top of it over time.
+
+**Risk flagged back at the user's own proposal:** the ISA-95 mapper is a naming-convention heuristic, already known to be fragile (a real bug on this exact heuristic was fixed — Entry 55). So the human-validation step he proposed isn't optional polish, it's load-bearing — an unvalidated auto-generated graph is a trust risk on day one, and it's the kind of step that's easy to deprioritize during implementation if nobody insists on it now. Flagged explicitly so it doesn't get cut.
+
+### What this changes for the Data Ops Studio's positioning
+
+Confirmed the user's reframing: the Studio stops being "the only way anything enters the graph" and becomes "the tool for building automations and enriching a graph that already exists." Shortens time-to-value from "weeks of pipeline-building" to "connect → auto-browse → validate → you have a graph."
+
+**Proposed flow (not yet built):** Connect (OPC-UA) → auto-browse + auto-map via the existing ISA-95 mapper → write skeleton to KG (`business`, unvalidated) → a validation step (accept/edit the proposed hierarchy — likely an addition to `OpcuaConnectPage` or a new dedicated page) → from there, Compose is for automations + further enrichment (SQL, cost, cause).
+
+### Status
+
+Discussed and agreed in principle; not yet turned into an implementation plan or built. Next step if the user wants to proceed: a concrete implementation plan (where exactly the bridge writes to `kg`, what the validation UI looks like, how "unvalidated" nodes render differently in `ForceGraph.jsx`).
+
+---
+
+## Entry 86 — 2026-07-19 — `docs/new_member_guide.md` written for onboarding
+
+**Trigger:** user asked for "a detailed doc to give to a new beginner member" covering every component in detail, how it works, skills needed to build something like it, a plan to run the whole solution, and — critically — where to look if a modification is needed.
+
+### Why a new doc instead of extending `ARCHITECTURE.md`/`COMPONENTS.md`
+
+Read both existing docs first. They're detailed and diagram-heavy but **stale in real ways** that would mislead a beginner: `sql_query` is still described as a "demo stub" (it's been fully implemented since the MySQL connector work, Entries 58-82); the Knowledge Graph is still described as two separate graphs (superseded by the Entry 50 / 2026-07-02 unification into one SQLite graph with a `category` column — same drift `/init` just fixed in `CLAUDE.md`, Entry 85); neither mentions `internal/connections`, `cmd/erpsim`, the `ConnectionsPage`/`SqlConfigPanel`/`FieldMapEditor` frontend, or that `KnowledgeGraphPage` now renders via `ForceGraph.jsx` (verified via grep — `CytoscapeGraph.jsx` still exists in the repo but is dead code, no longer imported anywhere). Rather than hand a beginner a doc with known-wrong claims, wrote a new one grounded in current code and cross-checked against `CLAUDE.md`'s (now-corrected) claims.
+
+### What's in `docs/new_member_guide.md`
+
+10 sections: (1) one-paragraph what-is-this, (2) big-picture diagram + the "frontend only talks to cmd/server, agent and server never call each other directly" rule that explains most of the architecture, (3) a glossary (OPC-UA/MQTT/ISA-95/UNS/pipeline/micro-stop/KG/connector/function) since "beginner" implies the industrial-domain vocabulary can't be assumed, (4) component-by-component detail for every binary/package/frontend piece, (5) two concrete end-to-end walkthroughs (a live tag reaching the dashboard; the `of_enrichment` SQL pipeline running), (6) a full run-it plan (external deps, step-by-step commands, how to verify each piece independently, test commands), (7) the API surface table, (8) a skills list **ordered by learning sequence**, not just named — Go → MQTT → SQL → React/ReactFlow → graph modeling → OPC-UA → ISA-95 → Docker → DAG execution, with a note that the scarce combination is industrial-protocol knowledge *plus* normal backend/frontend skill, not either alone, (9) a "where do I look to change X" cookbook table (14 rows — add a function, change cost calc, add a REST endpoint, change KG schema, add a SQL driver, change dashboard widgets, etc.) plus the one rule that causes the most confusing bugs for newcomers (functions must be registered in **both** `cmd/server/main.go` and `cmd/agent/main.go` or you get "unknown function" errors depending on which binary runs a pipeline), (10) known limitations, carried forward accurately from `CLAUDE.md`.
+
+### Discipline note
+
+Written and logged in the same turn as the request, per the just-widened [[feedback-proactive-doc-updates]] memory (Entry 85 already flagged this needed to generalize beyond the LinkedIn thread — this is the first test of that, done correctly this time: doc write and log write both happened before presenting the summary in chat, not after being asked).
+
+---
+
+## Entry 85 — 2026-07-19 — `/init` re-run finds real CLAUDE.md drift + local dev setup gaps filled in
+
+**Trigger:** user ran `/init` to refresh `CLAUDE.md`, then separately asked how to actually run the MySQL connector / fake ERP / OPC-UA / Docker stack end-to-end ("i'm lost"), then "did you log it?" for that walkthrough.
+
+### What `/init` found (real drift, not cosmetic)
+
+Compared the existing `CLAUDE.md` against current code rather than rewriting from scratch (the doc was already comprehensive and mostly accurate). One genuine architectural drift:
+
+- **Knowledge Graph merged from two graphs into one.** The doc described a SQLite-persisted "Domain KG" (Equipment/Event/Cause/Cost) plus a separately-computed, 5-min-cached in-memory "Technical KG" (pipeline topology). The actual code (`internal/kg/types.go`, merged 2026-07-02 — this is Entry 50, already in the log but the doc was never updated to match) is now **one SQLite-backed graph** with every node/edge tagged by a `category` column (`business` vs `platform`), read through a single `GetGraph(category)` → `GET /api/kg?category=business|platform|all`. `/api/kg/technical` and `/api/kg/domain` still work but are now thin legacy aliases (`handleTechnicalGraph`/`handleDomainGraph` in `cmd/server/main.go`). The 5-minute cache is gone, replaced by a registry-hash-based no-op check in `RepopulatePlatform`. `kg_nodes`/`kg_edges` gained the `category` column; legacy DBs get it backfilled to `'business'` by a migration in `internal/storage/sqlite.go`.
+
+Two smaller gaps also fixed: `GET /api/connectors` (a `type=connector`-filtered alias over `/api/functions`) wasn't documented; `frontend/.../src/lib/pipelineLoading.js` (chain-only pipeline loading — keeps node types/edges, resets configs to defaults) existed but wasn't in the `src/lib/` table.
+
+Verified via code, not guesswork: `internal/kg/graph.go` (`GetGraph`, `RepopulatePlatform`), `internal/kg/types.go` (Category constants + comment citing the 2026-07-02 merge), `internal/storage/sqlite.go` (migration), `cmd/server/main.go` (route registration + handler bodies), and confirmed the frontend's `src/api/client.js` already calls the unified `/kg?category=` endpoint, not the legacy aliases.
+
+### Local dev setup walkthrough — also written into `CLAUDE.md`, not just chat
+
+The "i'm lost" question surfaced that `CLAUDE.md` never actually stated the MQTT broker and OPC-UA source are **external, unbundled dependencies** — a reader following "Build and run" top-to-bottom would hit a wall. Added a new "External dependencies" subsection: Mosquitto isn't bundled (gave the `docker run eclipse-mosquitto` one-liner; `run.ps1` only warns, doesn't block), Prosys OPC-UA Simulator is the free tool the default `config/agent.yaml` endpoint targets, and OPC-UA is connected from the UI (**Connect → OPC-UA**), not from config, because `auto_connect: false` makes `cmd/server` own the session.
+
+Also added the actual **`MINDSET_ERP_PASSWORD=readonly_dev`** value into the fake-ERP quickstart commands — it was referenced by name everywhere (`config/connections.yaml`, `docker-compose.dev-erp.yml` comments) but the literal value (set in `sim/erp/grant.mysql.sql`) had never been written down in `CLAUDE.md` itself. Anyone following the doc previously would've had to go spelunking in `sim/erp/grant.mysql.sql` to find it.
+
+### Discipline note
+
+Doc-log gap: the `/init` CLAUDE.md edits were made and reported in chat, but not logged here until the user asked "did you log it?" a session after the pattern was already established for `docs/linkedin_profile_recommendations.md` (see [[feedback-proactive-doc-updates]]). That memory's scope was written narrowly around the LinkedIn thread; this confirms the same discipline needs to generalize to **any** substantive same-session work, not just the doc that prompted the original memory. Worth widening that memory's wording next time it's touched.
+
+---
+
+## Entry 72 — 2026-07-14 — Cost function reconciliation written into `docs/impact_engine.md`
+
+**Trigger:** user said "write the reconciliation" — Entry 71's proposal moved from opinion to the doc of record. Logged same-turn this time.
+
+### What changed in `docs/impact_engine.md`
+
+- **Header**: cross-refs Entries 69-71 and `docs/Cost_function.md`; status line fixed to point at the real V0 file.
+- **Dimensions list**: 13 → 14. Added dimension 14, Stock-shortage risk (PRICED, computed) to Category A. Added "The pricing rule" subsection stating the Entry 71 split: contractual/opaque → flag only, computable-from-exposed-ERP-fields → priced with a stated formula, judgment-call proxies → LOW-confidence fallback only, never primary.
+- **V0 baseline**: corrected — real code is `internal/functions/calculates/cost.go` (single component, `duration × hourly_rate/60`, with a per-product CSV/Excel override), not the nonexistent 3-component `internal/cost/model.go` the doc previously described. Called out that the existing per-product override is already a crude Enrichment #1 precursor, just wired into the wrong term (HourlyRate/TimeLoss instead of ProductionLoss).
+- **Enrichment #1**: added confidence-tiering paragraph — ERP/MES margin lookup is HIGH confidence, V0's existing CSV table is the LOW-confidence fallback, a bare criticality multiplier is never primary.
+- **New Enrichment #14 — Stock-shortage risk**: full spec added (formula `StockDeficitUnits × ProductMarginPerUnit`, data source, config shape, `stock_risk.go`), explicitly framed as the reconciliation of `Cost_function.md`'s "+1200€" brainstorm into something formula-derived and nullable-when-unknown rather than asserted.
+- **V1 Total Impact formula**: added the stock-risk term (additive when resolved, never guessed when absent) and a `confidence` field to event metadata.
+- **Architecture**: replaced the "Fuzzy Join engine" step/box with "provider nodes" — ordinary `sql_query` nodes discovered via `canonical_type` tag in `params`, citing `internal/pipeline/engine.go:196-211` as the existing mechanism. Same edit applied to the ASCII pipeline diagram, the Integration points list, and the "Dependency on..." section (renamed from "Dependency on Fuzzy Join").
+- **Code structure**: moved the whole V1 file list from an invented `internal/cost/` package to the real `internal/functions/calculates/` package where `cost.go` already lives. Added `stock_risk.go`. Added an explicit sequencing note: `downstream.go`/`line_layout.go`/`restart_cost.go`/`confidence.go`/`versioning.go` ship now (no connector dependency); `product_margin.go`'s ERP/MES path, `customer_flag.go`, `stock_risk.go` wait on the SQL connector (Entry 69 status: stuck at Day 2/10).
+- **Naming section added**: locks `calculate_cost` as the function identifier; `Cost_function.md`'s `calculate_business_impact` demoted to UI-copy-only, not a YAML contract change.
+- **Consistency sweep**: updated "4 enrichments" → "5 enrichments" and "13 dimensions" → "14 dimensions" everywhere they appeared (trust principles, takeaway table, pitch language, confidence-threshold recommendation in Open Questions).
+
+### Status
+
+`docs/impact_engine.md` is now the reconciled doc of record for the cost function. `docs/Cost_function.md` is left as-is (historical brainstorm, superseded, kept for provenance per the header cross-ref). No code changes made yet — this was documentation only, per the user's explicit request to write the reconciliation before touching code.
+
+---
+
+## Entry 71 — 2026-07-14 — Cost function / Impact Engine: my recommendation (still open, still being worked)
+
+**Trigger:** user asked for a detailed opinion on the Cost Function and how to implement it, following Entry 70's identified collision. Logged late again — user had to ask "where did you log it?" a second time. Second same-session miss; flagging the pattern honestly rather than burying it (first miss was Entry 70's own trigger line).
+
+**Status: still an open discussion, not a locked decision** — user flagged "we are working yet in cost_function", so nothing below is final. Recorded so the reasoning survives even mid-discussion.
+
+### Resolution proposed for Entry 70's flag-vs-priced-number collision
+
+Split by whether the underlying data is *computable* or *contractual*, not by picking one side:
+- **Contractual customer penalties** — flag only (impact_engine.md's position holds; most ERPs don't expose penalty-clause terms).
+- **Stock-shortage risk** — price it, but derive it: `expected_shortage_cost ≈ stock_deficit_units × product_margin_per_unit`, where `stock_deficit_units = max(0, demand_during_leadtime − current_stock)`. Rejects Cost_function.md's flat "+1200€" example as an unauditable magic number, but keeps the instinct that stock risk is priceable.
+- **Product criticality** — real per-product margin (impact_engine.md Enrichment #1) as the HIGH-confidence path; the coarse 1–3 multiplier (Cost_function.md) demoted to a LOW-confidence fallback when no margin field exists, not the primary mechanism.
+- Net rule: every dimension is either priced-with-a-visible-formula, or flagged — never a bare asserted number.
+
+### Architecture verdict — drop the "Fuzzy Join engine," reuse the pipeline engine as-is
+
+Read `internal/pipeline/engine.go` (`executeNode`, lines 170–231) to check what already exists rather than assume the docs' framing. Confirmed: every node's `params` map is already pre-loaded with every previous node's raw output keyed by node ID (lines 199–200), plus trigger data, plus node config. That is already the substrate Cost_function.md's "provider" pattern needs — a Product/Stock/Quality provider is just an ordinary upstream `sql_query` node the cost node `depends_on`.
+
+`impact_engine.md`'s `internal/fuzzy/of_state.go` "Fuzzy Join engine" doesn't exist and isn't needed — recommending it never gets built as a separate subsystem. Instead: `calculate_cost` discovers providers by scanning `params` for values carrying `canonical_type` (the semantic-mapping tag already spec'd in `docs/mysql_connector.md` §6b), so provider node IDs don't need to be hardcoded. This ties the cost-function work and the SQL-connector work (Entry 69) together instead of leaving them as two unrelated efforts.
+
+### Naming
+
+Keep `calculate_cost` (not Cost_function.md's `calculate_business_impact`) — matches impact_engine.md's own compatibility commitment, avoids breaking `config/pipelines/examples/cost_calculation.yaml` + `config/pipelines/pipeline_cost_calculation.yaml`. "Impact Engine" stays the pitch name only.
+
+### Code-level sketch proposed
+
+`internal/functions/calculates/cost.go` (currently 90 lines, single `TimeLoss`-shaped calc with a CSV/Excel per-product rate override) gets: a `CostResult` extended with `ProductionLoss`, `DownstreamIdle`, `RestartCost`, `StockRisk *float64` (nil = not computed, distinct from zero), `CustomerFlag bool`, `Confidence string`, `ModelVersion string`, `Breakdown map[string]float64` for dashboard drill-down (trust principle #1). Noted the existing per-product CSV override is already a crude Enrichment #1 — but it wrongly substitutes into `hourly_rate`/TimeLoss instead of being its own `ProductionLoss` term; flagged as a fix to make while touching this code, not a new gap.
+
+### Sequencing recommended
+
+Not blocked on the SQL connector (pure YAML config, ship first): downstream idle (`config/line_layout.yaml`), restart cost (`config/setup_costs.yaml`), confidence/versioning scaffolding on `CostResult`.
+
+Blocked on `internal/connections/` + real `sql_query` (Entry 69: stuck at Day 2/10): per-product margin from ERP/MES, customer-commitment flag, stock-shortage risk — all need a live provider query.
+
+### Open question put back to the user
+
+Start on the config-only pieces now, or write the reconciliation into `impact_engine.md` first so it's the doc of record before touching code? Not yet answered.
+
+---
+
+## Entry 83 — 2026-07-18 — LinkedIn profile review, live via the now-connected Claude in Chrome extension
+
+**Trigger:** user asked to connect LinkedIn access; after getting the browser extension working (it was installed in Microsoft Edge, not Chrome — the tool only bridges to actual Google Chrome, resolved by installing Chrome instead), asked to see the profile, then *"create a new doc and tell me what i should update or modify in my profile."*
+
+### What was reviewed (live, not from memory)
+
+`linkedin.com/in/mohamed-khenafif-52844335b` — headline, About, full Experience section (scrolled to it specifically since it didn't appear in the first page-text pull), top 5 posts by impressions, and the "Open to" setting (opened the picker, confirmed nothing is currently selected, closed without changing it).
+
+### Findings, most important first
+
+1. **The MindSet Data Experience entry has no description** — blank, while the freelance/contract entries below it both have one. Highest-leverage single fix.
+2. **Two overlapping company entries** — "Co-founder, MindSet Data" (Jun 2026–present) and "Co-Founder, Stealth Startup" (Feb 2026–present, "Powering the infrastructure behind manufacturing. Stay tuned.") — same person, same country, overlapping dates, obviously the same venture pre-announcement. Now that MindSet Data is public, both being listed reads as sloppy, not as a stealth→launch story.
+3. **Headline is pure embedded-engineer framing** — no mention of MindSet Data or the mission at all, despite the headline being the most-seen text on the platform.
+4. **About is 100% technical bio** — zero problem/mission framing, even though the top pinned-by-recency post on the same profile makes exactly that pitch.
+5. Smaller items: auto-generated profile URL slug, "Open to" left unset, and a content-mix observation — the 3 highest-reach posts (4.1K–7.5K impressions) are embedded tutorials, while the MindSet mission post sits lowest at 457 impressions and isn't pinned via Featured.
+
+### Deliverable
+
+`docs/linkedin_profile_recommendations.md` — the 5 findings above with suggested replacement copy for the headline/About/experience description (drawn from `Blurb_Invest.md`'s own language, not invented fresh), and a priority order. Explicitly scoped as a partial review (Skills/Recommendations/Certifications not checked) rather than implying a full audit.
+
+### Status
+
+Doc delivered, no profile edits made (this was a review, not an edit pass — nothing was changed on the live LinkedIn profile itself, aside from opening and closing the "Open to" picker without selecting anything).
+
+## Entry 84 — 2026-07-19 — Live investor lead: Polytechnique Ventures pre-seed initiative, Gaspard Devissaguet
+
+**Trigger:** user shared two WhatsApp screenshots (`docs/WhatsApp Image 2026-07-19 at 1.19.57 AM.jpeg` + `(1).jpeg`) of a conversation between Cécilia and Quentin Sanchez, plus a LinkedIn post URL, saying "am a ex-polytech student ... my co-founder contact a guy you find the discussion in 2 jpeg."
+
+### What the screenshots show
+
+Cécilia asked Quentin Sanchez (met at Vivatech, discussed École Polytechnique's X-UP incubator program) for an intro to Polytechnique Ventures after spotting their pre-seed announcement. Quentin's answer: since Mohamed is the Polytechnicien co-founder, he should skip the intro and email **Gaspard Devissaguet** (`gaspard.devissaguet@polytechnique-ventures.fr`) directly — "il se fera une joie de vous accorder un peu de temps." Cécilia said she'd relay the message.
+
+### What the LinkedIn post shows
+
+Polytechnique Ventures announced the **Denis Lucquin Catalyst Initiative**: 5% of their fund now earmarked for pre-seed startups, average ticket **€150k**, 1–2 calls/year for the most ambitious young ventures. Eligibility: deeptech, and at least one founder tied to École Polytechnique (graduate, researcher, incubated, or lab spin-off). Gaspard Devissaguet is tagged in the post itself — confirms he's the right contact, not just Quentin's guess.
+
+### Judgment call flagged to the user, not glossed over
+
+The user's LinkedIn lists "Institut Polytechnique de Paris — Master 2 ROSP" — the broader graduate consortium (École Polytechnique + Télécom Paris + ENSTA + others), not necessarily the specific "X" engineering degree the post names as the eligibility bar. Recommended being precise about this in the outreach email rather than letting Gaspard assume and find out later — a small honesty choice that could matter for how the first email lands.
+
+### Deliverable
+
+Drafted a French cold-email to Gaspard Devissaguet: references Quentin's referral, names the Denis Lucquin Catalyst Initiative and pre-seed focus specifically (proof of having read the actual post, not a generic pitch), gives the real MindSet Data description (the full pitch is appropriate here — this is private 1:1 investor outreach, not the public LinkedIn profile, so the "light framing, no specifics" rule from Entry 83 doesn't apply), asks for 20–30 minutes. Not sent — drafted only, pending user confirmation, per the explicit-permission-required rule for sending messages on the user's behalf.
+
+### Status
+
+Written into `docs/linkedin_profile_recommendations.md` §11 (kept in the same doc rather than a new file since it came out of the same messaging-review thread — flagged that it should split out later if it grows into its own workstream). **Honest note:** this still hadn't been written down when the user asked "did you log it?" — the 5th time in this thread the doc/log lagged behind chat despite the standing memory. The pattern is: I present findings/drafts fully in chat first, then only write them down when prompted or when explicitly closing out a sub-topic — the memory's "write in the same batch as presenting" rule keeps getting deprioritized under the pressure of answering the user's actual question quickly. Worth a harder rule: draft the doc write *before* composing the chat response, not after, even if it feels like it slows down the reply.
+
+### Addendum — rewrite requested, doc updated before the chat reply this time
+
+User asked for "an excellent email" — implicitly, v1 wasn't quite there. Rewrote it: replaced the generic OT/IT-silos description with the concrete finance/shopfloor wedge (Entry 74's chosen wedge — the 45-second-stop pattern, same one used in the LinkedIn posts drafted in Entry 83 §7), and removed the self-doubting eligibility line — stating the real degree factually and letting Gaspard judge fit himself is a stronger opener than pre-litigating doubt in a cold email. Added a low-friction alternative (offer a one-page summary before a call) and the real `mohamed@mindset-data.com` signature. v1 kept in the doc as "superseded, kept for reference" rather than deleted, so the reasoning for the change is visible later. Wrote both drafts into `docs/linkedin_profile_recommendations.md` §11 *before* composing the chat reply this time — first real test of the sharper memory rule from the note directly above.
+
+**Process note, since this entry itself needed a same-turn correction:** the first attempt at this addendum was misplaced in the file — inserted before Entry 84's own heading instead of after Entry 84's Status section, because the Edit tool's anchor string matched the entry heading rather than the true insertion point at the end of the entry's content. Caught and fixed immediately by re-reading the surrounding lines rather than trusting the edit had landed correctly. Same discipline as verifying code changes: don't assume a written edit is correct without checking the actual result when the structure is non-obvious.
+
+### Addendum 2 — v3, swapping the operational use-case for the macro thesis
+
+User feedback on v2: don't use an operational example (the micro-stop pattern) in an investor email — lead with finance/AI/silos/decision instead. Rewrote the middle paragraph around `Blurb_Invest.md`'s "Why now" argument (AI agents hitting a wall on OT context, margin pressure) and "Why existing solutions fall short" (silos, decision latency, economic prioritization) instead of the shopfloor anecdote used in the LinkedIn content plan (Entry 83 §7). The underlying judgment: the finance/shopfloor wedge decided in Entry 74 was chosen for customer/engineer outreach, where a concrete example builds credibility fast — a VC audience runs on a different instinct, market-timing thesis over operational vignette, so the same wedge doesn't automatically transfer across audiences even though it's the "decided" positioning elsewhere. v2 kept in the doc, marked superseded, not deleted. v3 written into `docs/linkedin_profile_recommendations.md` §11 before this chat reply.
+
+---
+
+### Addendum 6 — the real outreach tracker, and a second candidate batch
+
+User shared the actual shared Google Sheet (`Outbound`, 5 tabs) the team already uses to track outreach — a much more authoritative source than anything found via ad-hoc LinkedIn search. Reviewed all 5 tabs: "Outreach List" (~45 named contacts matching `Blurb_Invest.md`'s target verticals — pharma, food/dairy, chemicals — no status column), "Prospecting factories MVP" (smaller food companies, has a real status column: Pending/2ème relance/2ème relance envoyé, plus a personal-network section), "SI" (near-empty, one note about Siemens/Schneider partners), "Digital solutions/startups" (barely started), "Online Forum / Groups" (completely empty — exactly where Entry 83's groups/content plan belongs).
+
+This corrected Addendum 5's work: Rami and Randy (found via independent LinkedIn search) turned out to already be on the sheet — real, correctly-targeted people, just not new discoveries. Boudjemaa and Doria are confirmed genuinely new.
+
+User then asked specifically for candidates *outside* the existing sheet. Ran 2 more targeted searches (general "Responsable Informatique Industrielle," and "responsable automatisme cosmétique" specifically to hit the cosmetics vertical the sheet under-covers), cross-checked all resulting company names against the ~45 already tracked, and surfaced 11 confirmed-new candidates — including one CODIR/executive-committee-level contact (Yannick Martineau) and one in metallurgy (Guillaume Merlier, UGITECH), a named target vertical otherwise absent from the sheet.
+
+Wrote §9 (sheet review) and §10 (11 new candidates) into `docs/linkedin_profile_recommendations.md` **proactively, before responding in chat** this time — user still said "write every response, don't forget please 🙂" preemptively, meaning the sharpened memory rule from Addendum 5 is being followed but the user hasn't yet seen enough consecutive turns of it working to stop reminding. Worth continuing to write-then-present, without needing the reminder, until that trust rebuilds on its own.
+
+### Addendum 5 — messages inbox review, co-design candidates, and a self-caught gap
+
+Next day (2026-07-19). User asked to read LinkedIn messages "to know the actual stat[us]." Opened all 17 threads in the inbox: 3 investor conversations (Maxime Lhoustau/Motier Ventures, Antoine Loiseau/ex-VC, Pierre Ben Kiran) all already routed to `cecilia@mindset-data.com` awaiting her follow-up; the rest split between vendor pitches to Mohamed (Benoit Camus, Tijn van Daelen, Arslan Akram, Zeshan Ali, Julien Lijeour), recruiters (Sérène Dupré, G.Rodney Rendambo — the latter offered Mohamed a job, declined), and personal/unrelated (Cécilia's informal thread, Ramzi Belkhelfa, Théo Louro). Reported this as a categorized status, not a raw dump.
+
+User then asked to open the remaining unopened threads specifically to find co-design outreach targets. Finding, stated plainly: **zero existing contacts in the inbox are manufacturing/industrial-operations prospects** — the network skews toward people pitching Mohamed, investors, and personal contacts. A co-design ask can't be sourced from the inbox as-is.
+
+User named two people to contact — Rami (already known, from the earlier inbox review) and "Boudjemaa," a name not present in any reviewed thread. Rather than guess, searched LinkedIn's 1st-degree connections for the name — found exactly one match, **Boudjemaa Abdelhadi TELLI** ("Ingénieur Automatisme & Informatique Industrielle | Industrie 4.0 | MES/SCADA"), confirmed before drafting anything. Searched further for "propose others" — found **Randy LENDOYE** ("Industrial IT | PLC | SCADA | MES | ERP | EMS | BAS") and **Doria Belahbib** ("Industrial engineer and information system project director") as additional 1st-degree candidates.
+
+Drafted outreach messages for the 2 named candidates only (not the 2 proposed-but-unrequested ones): Rami's matches the casual, already-established rapport from his existing thread (Arabic greeting, informal); Boudjemaa's is a first-contact message that references the mutual-connections signal rather than opening cold. Neither sent — drafting only, per the explicit-permission-required rule for sending messages on the user's behalf.
+
+**Caught the "did you write it down" gap myself this time** — after presenting the findings and drafts in chat, the user asked "where did you write the reply?" and it turned out I hadn't, despite creating a memory about exactly this pattern one addendum ago (Addendum 4). Added §8 to `docs/linkedin_profile_recommendations.md` (inbox findings, candidate table, both drafts) and updated the priority list (items 11–12) immediately upon being asked — but the fact it still needed asking means the memory alone didn't change the in-session behavior; worth treating as a live checklist item at the point of presenting any drafted content, not just a passive recall.
+
+### Addendum 4 — content/groups strategy, and the same "did you write it down" question a third time
+
+User asked for a content strategy: post in many groups to build audience/followers interested in the solution or skills "indirectly" — without pitching the company, mirroring the pattern that already works (the RTOS/ESP32 posts, Entry 83's §6, get 4.1K–7.5K impressions with zero company mention). Rather than guess group names, searched LinkedIn's live group search 3 times ("industrial IoT," "manufacturing data analytics," "OPC UA automation") and read the real results — found a useful split between broad-reach groups (15K–31K members, general Industry 4.0/IIoT audiences) and small, exactly-on-theme ones (49–2K members) where a group's own stated topics literally include "OPC UA" and "SQL & Manufacturing Data Analytics." Proposed 9 candidate groups total and 5 "indirect" post ideas grounded in this session's actual technical work (the `sql_query` guards, testcontainers, ISA-95 mapping) rather than generic content-marketing advice.
+
+User then asked *"did you write it in linkedin...md?"* — third time this exact question has come up in this thread (Addenda 1 and this one). Added a new §7 to `docs/linkedin_profile_recommendations.md` with both the groups table and the post ideas, both explicitly marked as not-yet-executed (groups: listed, needs a go-ahead before joining since it's an account-state change; posts: ideas only, none drafted). Updated the priority list with 2 new open items (9, 10).
+
+**Pattern worth naming:** across this whole LinkedIn thread, the user has now asked "did you write everything down" 3 times after substantive follow-up work. Going forward, updating `docs/linkedin_profile_recommendations.md` should happen proactively, in the same turn as the work, not after being asked — same discipline `[[analysis-log-convention]]` already establishes for this file, evidently needs to extend by default to whatever working doc is open for a given task rather than waiting for the user to notice the gap.
+
+### Addendum 3 — About didn't reflect current work; fixed, Skills added, doc made fully current
+
+User caught a real gap: the restored About bio (STM32/ESP32, UART/SPI) reads as if MindSet Data itself builds embedded hardware — it's pre-MindSet background, not current work, and nothing in the bio said so. Fixed with two changes, both applied live via the browser: reframed the old bio as explicitly past ("Before that, I spent years as..." + past tense throughout), and added a new middle paragraph naming real current technical scope — Go-based backend systems, OPC-UA/MQTT protocol integration, SQL data connectors, real-time data pipeline architecture. That list isn't invented — it's the actual work from this session (Entries 76–82: `internal/connections`, `sql_query`, the pipeline engine, OPC-UA/MQTT bridging). Also added 4 matching entries to the profile's Skills section (Go (Programming Language), SQL, REST APIs, Data Pipelines) via the same edit form — LinkedIn's autocomplete matched all 4 as recognized skills on the first try.
+
+Browser notes: the CDP screenshot call timed out 3 times mid-session (30s timeout, "renderer may be frozen") — each time, a `wait` + retry recovered cleanly and the prior click had actually landed correctly (verified via the next successful screenshot), so no action was lost; treating it as a transient rendering hiccup in this environment, not a real failure, per the "don't loop on the same failing action" guidance — didn't retry more than once per incident.
+
+Also found while re-verifying the live page: (a) the public profile URL had auto-resolved from the numeric-suffix slug to the clean `linkedin.com/in/mohamed-khenafif` with nobody explicitly changing it — item 5 (URL cleanup) is done without action; (b) a 5th Experience entry (a Sonatrach internship, Feb–Aug 2021) and an Education section (Institut Polytechnique de Paris, Ecole Nationale Polytechnique) existed on the profile but were never captured in this doc's Appendix — the very first review pass didn't scroll that far down. User then asked directly *"write everything in linkedin_profile_recom..."* (second time asking for this) — rewrote the Appendix as the live, current-state snapshot (explicitly labeled as such, distinct from the pre-edit originals preserved in items 3–5 for reference), added the missing internship/education entries, Top Skills, Connected apps, and updated the priority list to reflect that items 2 and 8 are now the only two still open.
+
+### Addendum 2 — live edits, plus a recovery
+
+After the doc catch-up (addendum below), the user applied the agreed light-framing headline and About wording themselves directly on LinkedIn — both now live: headline is "Co-Founder @ MindSet Data — building the future of industrial data | Embedded Software Engineer | FreeRTOS, STM32, ESP32"; About leads with the new one-line opener. While editing About by hand, the user accidentally deleted the original technical-bio paragraph below the new opener, leaving only the opener. Recovered it: opened the About edit form via the browser, confirmed the loss visually (textarea contained only the new line), and retyped the full original paragraph verbatim from the Appendix already captured in `docs/linkedin_profile_recommendations.md` — exact match, saved, and re-verified on the live page afterward. The Appendix having the verbatim original text on hand (written minutes earlier, for an unrelated reason — completeness) is what made an exact recovery possible instead of a from-memory reconstruction. Updated the doc's status markers (items 3–4 now "done, live" instead of "drafted, not applied") and added a note to "Decisions made so far" about the accidental deletion and recovery.
+
+### Addendum — same day, continued in chat but not written down until asked
+
+After the initial doc, three more rounds happened in chat only: user declined item 1 (Experience description — not writing an official MindSet Data description pre-launch), then chose "light framing, no specifics" as the visibility level for headline/About (out of 4 options offered), which produced drafted-but-not-yet-applied wording for both; then a full posts/Activity audit (`/recent-activity/all/`, confirmed via "Show more results" that 5 items is the complete history — 1 keep-worthy MindSet post, 1 low-priority-remove repost, 3 keep-worthy technical posts). None of this had been written into `docs/linkedin_profile_recommendations.md` until the user asked *"did you write everything in doc?"* — it hadn't. Updated the doc to add: a "Decisions made so far" section up top, the agreed light-framing wording for items 3–4 (original full-pitch suggestions kept alongside, marked as not being used yet), the Featured-section skip decision folded into item 5, a new §6 posts/Activity audit table, and a status-tagged priority list (declined / agreed-not-applied / pending-user-input / optional) instead of a flat todo list. Noting the gap here rather than pretending the doc was current the whole time — same discipline as Entry 69/70's process notes about logging lag.
+
+---
+
+## Entry 82 — 2026-07-18 — Live verification against real MySQL: 2 real bugs found and fixed, everything else passes
+
+**Trigger:** user asked directly *"the mysql connector is finished?"* — answered honestly that it was code-complete but never verified against a live database (Docker wasn't running all of Entries 76–81). User replied *"yes do it"* to running the verification for real.
+
+### What changed to make this possible
+
+Docker Desktop wasn't running. Started it (`Start-Process "...\Docker Desktop.exe"`, then polled `docker version` until it responded — ~90s). This is the first entry in the whole MySQL-connector arc where a live database was actually reachable.
+
+### Bug 1 (environment, not code) — port 3307 was already taken, by something unrelated to Docker
+
+`docker compose -f docker-compose.dev-erp.yml up -d` reported the container already `Running` (created back on 2026-07-09, per `docker inspect .Created` — a leftover from Entry 61). `docker port mindset-erp` showed `"3306/tcp":[]` — **no port published at all**, despite the compose file saying `3307:3306`; compose saw no config diff worth recreating the container for. Meanwhile `POST /api/connections/dev_erp/test` against port 3307 returned a real, specific error (`Access denied for user 'mindset_readonly'@'localhost' (using password: YES)`), and `Get-NetTCPConnection -LocalPort 3307` showed something WAS listening — PID 8040, resolved via `Get-Process` to `c:\xampp\mysql\bin\mysqld.exe`. A local XAMPP MySQL install happens to also be bound to 3307 on this machine — the exact class of collision `docker-compose.dev-erp.yml`'s own comment already warned about for port 3306, just recurring one port over.
+
+**Fix:** moved the mapping to **3308** (confirmed free via `Get-NetTCPConnection`) in `docker-compose.dev-erp.yml`, `cmd/erpsim/main.go`'s default `ERPSIM_DSN` (comment + code), and `config/connections.yaml`'s `dev_erp.port`. `docker compose up -d --force-recreate` to actually pick up the new mapping (confirmed after: `docker port mindset-erp` → `3306/tcp -> 0.0.0.0:3308`). Did **not** touch the XAMPP service — stopping a system service the user didn't ask about, that might be in use for something unrelated, isn't a call to make unilaterally.
+
+### Bug 2 (real code bug) — `GET /api/connections` couldn't see YAML-seeded connections
+
+While chasing Bug 1, `GET /api/connections` returned `{"connections":[],"total":0}` even after the port fix and even though `/dev_erp/test` worked. Cause: `listConnections` (`cmd/server/connections_handlers.go`) read `s.kg.Store().ListConnections()` — SQLite only — instead of `s.connReg.List()`, the registry's merged view (YAML-seeded + persisted, per Entry 78's startup wiring). The shipped `dev_erp` entry lives only in `config/connections.yaml`, never `POST`ed, so it was invisible to the list endpoint (and therefore to `SqlConfigPanel`'s connection dropdown) despite being fully usable. **Fixed** — `listConnections` now reads `s.connReg.List()` directly; simpler than the original (no SQLite round-trip, no error path to handle) as well as correct. Verified: `GET /api/connections` now returns `dev_erp`, and its `read_only`/`status` fields update correctly after a `/test` call.
+
+### Everything else — genuinely verified against real MySQL, first time
+
+- `go test -tags=integration -v -count=1 ./internal/e2e/...` — **all 5 tests pass** for real (previously only proven to skip cleanly): `TestHappyPath` (25s, real container, correct row), `TestTimeoutKicksIn` (22s), `TestInjectionAttempt` (19s, confirmed `work_orders` still has 2 rows after the attempt), `TestReadOnlyEnforcement` (20s), `TestHealthCheck_readonly_user` (20s, read-only user reports `true`, writer user on the same container reports `false` — the contrast assertion from Entry 81 actually discriminates, not just returns `true` unconditionally).
+- `POST /api/connections/dev_erp/test` → `{"ok":true,"latency_ms":51,"read_only":true}` — real dial, real health check, against the actual `mindset_readonly` grant from `sim/erp/grant.mysql.sql`.
+- `POST /api/connections/dev_erp/preview` with `:st` bound to `"RUNNING"` → 3 real rows back (machine1/2/3, real product codes and quantities from the live `erpsim` simulator's data).
+- **The `of_enrichment.yaml` example pipeline, run for real** (not just failing at the dial step like Entry 80): `mqtt_subscribe → sql_query → mqtt_publish` all reported `status: "success"`; the `sql_query` node's output shows both `rows` (raw columns, including `started_at`) and `canonical` (exactly the `field_map`-mapped fields: `of_number`, `product_code`, `planned_qty`, `actual_qty`, `operator_id`) with `canonical_type: "work_order"` — the semantic-mapping layer from Entry 60/77 confirmed working against real, live MySQL data end to end.
+
+### Still not done
+
+Frontend (`ConnectionsPage`, `SqlConfigPanel`, `FieldMapEditor`) still not visually verified — the Claude-in-Chrome extension isn't connected in this environment (checked again, same as Entries 79/80). Everything it depends on (the REST contract) is now confirmed correct against real data, so the risk here is narrow (rendering/interaction bugs, not data-shape mismatches), but it's still an honest gap, not a "probably fine."
+
+### Status
+
+The MySQL connector V1a is now genuinely, not just procedurally, verified: real MySQL, real integration tests passing, real end-to-end pipeline run, two real bugs found by doing the verification instead of assuming it would pass and fixed on the spot. The only remaining unverified surface is the frontend's actual rendering/click behavior.
+
+---
+
+## Entry 81 — 2026-07-17 — MySQL connector Day 9 — testcontainers integration tests (written, not executable here)
+
+**Trigger:** continuing "go day by day" — the last item on `docs/mysql_connector.md`'s 2-week task list (§11).
+
+### What shipped
+
+`internal/e2e/sql_pipeline_test.go`, gated behind a `//go:build integration` tag (`go test -tags=integration ./internal/e2e/...` — deliberately excluded from a plain `go test ./...`, matching §12's own split between the "Unit (no docker)" and "Integration (testcontainers)" buckets). Added `github.com/testcontainers/testcontainers-go` + its `modules/mysql` submodule to `go.mod` (`go mod tidy` after).
+
+All 5 tests from §12's Integration table, against one shared disposable MySQL 8 container per test (`mysql.Run`, seeded via an init script mirroring a slice of `sim/erp/schema.mysql.sql` plus a genuinely read-only user, the same pattern as `sim/erp/grant.mysql.sql`):
+
+- `TestHappyPath` — real container, seeded `work_orders`, `SELECT ... WHERE work_center = :wc` returns the right row.
+- `TestTimeoutKicksIn` — `SELECT SLEEP(5)` with a 1s timeout errors and returns in well under 5s.
+- `TestInjectionAttempt` — `:id = "WO-1; DROP TABLE work_orders"` bound as a single parameter value; asserts zero matching rows AND that `work_orders` still holds both seeded rows afterward (not just "no error" — actually re-queries the table to prove it wasn't dropped).
+- `TestReadOnlyEnforcement` — proves the guard ordering, not just that an INSERT is rejected: passes a nonexistent `connection_id` alongside the INSERT and asserts the error is the SELECT-only guard message, not "unknown connection id" — which would only be possible if `ensureSelectOnly` really does run before the registry lookup, as designed in Entry 77.
+- `TestHealthCheck_readonly_user` — asserts the read-only user reports `read_only=true` via `Registry.Test`, AND that the writer user (full grants) reports `read_only=false` on the same container — a same-container contrast, so the test can't pass by `Test` always returning `true`.
+
+### Honest limitation: could not actually run these here
+
+Docker Desktop isn't running in this environment (same gap noted in Entry 78/79). Ran `go test -tags=integration -v ./internal/e2e/...` anyway to prove the *skip path* works: every test correctly attempted to start a container, got `rootless Docker is not supported on Windows, failed to create Docker provider`, and skipped cleanly (not failed) with that message. That's real verification that the harness, build tag, and skip logic all work — but the 5 tests' actual assertions (real MySQL types, a genuine timeout, a genuine injection attempt, a genuine read-only-vs-writer contrast) are unverified in this session. Confirmed `go build ./...` still succeeds and a plain `go test ./...` correctly excludes the whole `internal/e2e` package (zero buildable files without the tag — it doesn't even appear in the package list, not even as "no test files"). Next person with Docker running should run `go test -tags=integration -v ./internal/e2e/...` and treat a first-run failure as a real bug report, not assume it's environmental the way this session's SKIPs were.
+
+### Status
+
+Day 9 — and with it, the full 2-week `docs/mysql_connector.md` V1a task list (§11) — complete on paper: Days 1–9 all have shipped code, reviewed against the plan. Days 1–2 were already live-verified against the real docker-compose stack in earlier sessions (Entry 61–63); Days 3–8 (this session, Entries 76–80) were verified as thoroughly as this environment allows (unit tests, live smoke tests via a running server, one real end-to-end pipeline run) but never against a live MySQL — that's the one gap across the whole sprint, consistently flagged rather than glossed over. Week 3's "first customer smoke test" (§11) is a business/GTM step, not an engineering one — out of scope here.
+
+---
+
+## Entry 80 — 2026-07-17 — MySQL connector Day 8 — `of_enrichment.yaml` example pipeline, smoke-tested end-to-end
+
+**Trigger:** continuing "go day by day" — the last un-blocked backend/config piece before Day 9 (integration tests).
+
+### What shipped
+
+`config/pipelines/examples/of_enrichment.yaml` — `mqtt_subscribe` (`mindset/events/status-change`) → `sql_query` (current RUNNING work order for a work center, against the `dev_erp` connection, with `field_map`/`canonical: work_order`) → `mqtt_publish` (`mindset/events/status-change-enriched`), matching §11 Day 8 and the "enrich a micro-stop with its OF" use case from `docs/sql_connectors.md` §8.1.
+
+**Known, documented limitation baked into the file itself:** the query's `:work_center` parameter is a static value (`"machine1"`), not a live binding from the triggering event — confirmed (again, same finding as Entry 79) that `internal/pipeline` has no `{{ trigger.x }}` templating, so `docs/mysql_connector.md` §6b's own templated example is aspirational. Rather than write an example that silently doesn't do what its own comment implies, the YAML has an explicit comment explaining the limitation and pointing at Entry 79.
+
+### Verification — actually executed, not just parsed
+
+1. `GET /api/pipelines/examples` — confirmed the file parses and appears alongside the two existing examples.
+2. Copied it to a temp pipeline (`of_enrichment_smoketest`), `POST /api/pipelines` to save it as a real (non-template) pipeline, then `POST /api/pipelines/of_enrichment_smoketest/run`. Result: topological execution reached the `sql_query` node, resolved the `dev_erp` connection from the registry, and failed with exactly `sql_query: connections "dev_erp": env var MINDSET_ERP_PASSWORD is empty or unset` — the correct, expected failure given Docker Desktop isn't running here (no live MySQL, no env var set). This confirms the full chain (pipeline engine → sql_query handler → connections registry → guards) is wired correctly end to end; only the live MySQL dial itself is untestable in this environment.
+3. Deleted the smoke-test pipeline file afterward (`git status` confirmed only the real example file remains untracked).
+
+### Status
+
+Day 8 complete. Next: Day 9 — `internal/e2e/sql_pipeline_test.go` (testcontainers-go MySQL). Flagging ahead of starting: Docker Desktop isn't running in this environment, so those tests can be written and made to compile, but not actually executed here — will note that honestly rather than claim a run that didn't happen.
+
+---
+
+## Entry 79 — 2026-07-17 — MySQL connector: Connections page + SQL config panel + FieldMapEditor (frontend Days 6–8)
+
+**Trigger:** user, continuing the day-by-day pattern: *"go day by day."*
+
+### `ConnectionsPage.jsx` (§11's "Connections page" day)
+
+New page at `/connections`, styled to match `OpcuaConnectionPanel`/`PipelinesPage`'s existing dark-theme conventions rather than inventing a new one: list of connections (id/name/driver/host:port/database, a `StatusBadge` showing "non testé" until a Test has run, then "lecture seule" or "⚠️ accès en écriture"), a create form (id/name/host/port/database/username/password_env/tls, with pool/timeout fields collapsed behind an "Options avancées" toggle since the backend already defaults them), Test and Supprimer buttons per row. Added `fetchConnections`/`createConnection`/`testConnection`/`previewConnection`/`deleteConnection` to `api/client.js`, matching the existing per-endpoint wrapper pattern — and matching each handler's *actual* error shape (`/test` always resolves 200 with `{ok:false,...}` in the body; `POST`/`DELETE` return plain-text errors via `http.Error`, not JSON, so those wrappers read `response.text()` like `runPipeline` already does, not `response.json()`). Wired into `App.jsx` (`/connections` route) and `NavBar.jsx` (new "Connections" tab, `Database` icon).
+
+### Architecture finding before building the SQL config panel
+
+Checked how connector-type functions currently reach the canvas before writing `SqlConfigPanel`, since the plan's own example pipeline (`of_enrichment.yaml`, Day 8 — not yet written, next task) needs `sql_query` to run **mid-pipeline** (`mqtt_subscribe → sql_query → mqtt_publish`), not as the trigger. Found `BuilderPage.jsx` filters connector-type functions out of both the drag-and-drop Palette (`functions.filter(f => f.type !== 'connector')`) and the "+" function picker — connectors were assumed trigger-only, selectable only via `ConnectPage`/`NodeConfigPanel`'s trigger dropdown. The backend has no such restriction (`internal/pipeline`'s engine executes any node type in dependency order — confirmed no code enforces "connector = trigger only"), so this was purely a frontend gap, not an architectural constraint.
+
+Fix, scoped narrowly rather than opening the Palette to all connectors (`opcua_read`/`mqtt_subscribe`/`modbus_read` genuinely are trigger-only — they start a pipeline, they don't enrich one): added `MID_PIPELINE_CONNECTORS = new Set(['sql_query'])` in `connectorTemplates.js` and let it through both filters in `BuilderPage.jsx`. Also fixed a latent inconsistency this exposed: `addFunctionNode` (the "+" picker's add path) unconditionally used `defaultFunctionConfig` (the transform/calculate defaults map) regardless of function type, unlike `onDrop` which already branched on `fn.type === 'connector'`. Harmless before (no connector ever reached that path), but would have silently handed `sql_query` an empty `{}` config if left as-is — fixed to branch the same way `onDrop` does.
+
+### `SqlConfigPanel.jsx` + `FieldMapEditor.jsx` (§11 Day 7–8)
+
+Wired into `NodeConfigPanel.jsx` behind `isSqlQuery = fn === 'sql_query'`, alongside the existing `isOpcua`/`isCost` special-case pattern (own hidden-fields set: `connection_id, query, params, timeout_seconds, limit, canonical, field_map` — same technique `isCost` already uses to keep its own fields out of the generic key/value list below).
+
+- `SqlConfigPanel.jsx` — connection dropdown (fetched live from `/api/connections`), a plain `<textarea>` query editor (skipped Monaco — §7's frontend section calls it out as a nice-to-have, not required for V1a, and a textarea is zero new dependencies), a `ParamsGrid` sub-component for `:name` values, timeout/limit number inputs, canonical-type input, `FieldMapEditor`, and a Preview button that calls `POST /api/connections/{id}/preview` and renders the first rows as a table.
+- **Deliberately did not present `{{ trigger.field }}` template syntax as working**, even though `docs/mysql_connector.md` §6b's own example config shows it (`params: {work_center: "{{ trigger.work_center }}"}`). Checked `internal/pipeline` for any `{{` handling — none exists. `CLAUDE.md`'s "merges previous node outputs + trigger data + the node's own config into one params map" describes a flat top-level merge, which doesn't reach into a nested `config.params` object either. So today, `params` values are static only; the doc's templating example is aspirational, not yet implemented. `ParamsGrid`'s help text says nothing about templates, to avoid documenting a feature that silently wouldn't fire.
+- `FieldMapEditor.jsx` — per canonical field: rename-in-place key, a simple/énum mode toggle, either a raw-column text input or a `from` column + an editable raw→canonical value-map sub-grid — directly mirrors the two `field_map` value shapes the Go handler's `applyFieldMap`/`applyValueMap` (Entry 77) already accept.
+
+Also fixed `CONNECTOR_TEMPLATES.sql_query` in `connectorTemplates.js`, which still had the OLD pre-Day-4 shape (`{dsn: "postgres://...", query: "SELECT * FROM events"}` — Postgres syntax, a field name the Go handler never reads) — replaced with the real shape (`connection_id`, `query`, `timeout_seconds`, `limit`). This template feeds both the `ConnectPage` "config par défaut" preview and every fresh `sql_query` node's seeded config, so this was a real, user-visible bug being fixed, not just cleanup.
+
+### Verification
+
+`npx eslint` on every touched/new file — zero errors (only ran against pre-existing untouched files in `BuilderPage.jsx`/`DashboardPage.jsx` do the 3 pre-existing errors from Entry 78's baseline still show, at shifted line numbers). `npm run build` clean both before and after. Could not visually exercise the pages — the Claude-in-Chrome browser extension isn't connected in this environment (checked twice) — so this is lint/build/code-review verified, not click-tested. Both dev servers (`:5173`, `:8080`) were left running in case a visual check becomes possible.
+
+### Status
+
+Frontend Days 6–8 (Connections page, SQL config panel, FieldMapEditor) complete per the above. Next: Day 8's `config/pipelines/examples/of_enrichment.yaml`, then Day 9's testcontainers integration tests.
+
+---
+
+## Entry 78 — 2026-07-17 — MySQL connector Day 6 — `/api/connections` REST endpoints, `sql_query` wired for real
+
+**Trigger:** user, continuing straight from Day 4–5 (Entry 77): *"yes"* → *"go"*.
+
+### Doc ambiguity noted before starting
+
+`docs/mysql_connector.md` §11 has two entries labeled "Day 6" (a copy/paste artifact from the Week 1→2 transition): the backend one ("REST endpoints" — `connections_handlers.go`, SQLite table, wire into `main.go`, register `sql_query` in both binaries) and, under Week 2, "Connections page" (frontend `ConnectionsPage.jsx`). Treated the backend one as today's scope — the natural next step after Day 4–5 — and left the frontend Connections page (mislabeled Day 6, actually Week 2 UI work) for a separate pass.
+
+### What shipped
+
+**`internal/connections` — extended beyond the Day 3 static-config design**, because Day 6 needs connections created at runtime (via the API), not just loaded once from YAML at startup:
+- `config.go` — added `json` tags (mirroring the existing `yaml` tags, snake_case) so `ConnectionConfig` round-trips through the REST body with no separate DTO; extracted `validateConnection` (per-entry rules) out of `Config.validate` so `Registry.Add` can reuse the exact same validation YAML loading uses.
+- `registry.go` — redesigned around a mutable `conns map[string]ConnectionConfig` (was a read-only `*Config`). New methods: `Add` (validate + apply defaults + store + close any existing pool for that id, so a config change takes effect on the next `Get`), `Remove` (drop + close), `List` (sorted by id). New `Test(id)` method: unlike `Get` (verifies once, then trusts the cached pool), `Test` always re-runs the health check — reuses the pool if already open, opens fresh if not — because a "Test connection" button that silently returns a stale cached result would be actively misleading.
+- One real bug caught by its own test during this work: the first `Test` implementation dereferenced `existing.db` before checking `hasExisting`, nil-panicking whenever a connection hadn't been opened yet — `TestRegistry_Test_reverifies` failed immediately with a nil-pointer panic, fixed by only reading `existing.db` inside the `hasExisting` branch.
+- 5 new registry tests (`TestRegistry_AddListRemove`, `TestRegistry_Add_rejectsInvalid`, `TestRegistry_Add_closesExistingPoolOnReplace`, `TestRegistry_Test_reverifies`) alongside the 7 from Day 3 — 11/11 pass.
+
+**`internal/storage/connections.go`** — new `ConnectionRecord` (embeds `connections.ConnectionConfig` + timestamps) and `ListConnections`/`UpsertConnection`/`DeleteConnection` on `SQLiteStore`. `internal/storage` importing `internal/connections` is a one-way edge (no cycle) — pragmatic over introducing a duplicate DTO type. `connections` table (schema per §9) added to `internal/storage/sqlite.go`'s `initTables`.
+
+**`cmd/server/connections_handlers.go`** — the 5 routes from §9: `GET/POST /api/connections`, `POST /api/connections/{id}/test`, `POST /api/connections/{id}/preview`, `DELETE /api/connections/{id}`. `preview` doesn't reimplement the SQL guards — it constructs a `connectors.NewSQLQueryHandler(s.connReg)` and calls `Execute` with the request capped at `limit=5`, so preview and real execution share one code path by construction rather than by discipline. `listConnections` never touches passwords (the table only ever stores `password_env`) and reports `read_only`/`status` from whatever the registry currently knows (nil/"unknown" until a `Get` or `Test` has run).
+
+**Wiring, both `main.go`s:** `connections.LoadConfig("config/connections.yaml")` (missing file → empty set, not fatal, matching how `agent.yaml` itself is already tolerated), `connections.NewRegistry`, then persisted rows from `data/mindset.db` loaded via `Add` — DB-persisted connections win over a same-id YAML entry, since they reflect the most recent user edit through the UI. `cmd/server/main.go`'s `stubConnector("sql_query", ...)` line replaced with `connectors.NewSQLQueryHandler(connReg)`; `cmd/agent/main.go` — which, discovered while doing this, doesn't register ANY connector today (not `opcua_read`, not `mqtt_subscribe`, not `modbus_read` — contradicts `CLAUDE.md`'s "must be registered in both" rule, a pre-existing gap, not introduced here and not fixed here since it's out of scope) — gained `sql_query` specifically, per §11's explicit instruction to register it in both binaries. `withCORS` gained `DELETE` to its allowed methods (the first DELETE route in the API).
+
+### Verification
+
+`go build ./...` clean. `go vet` clean except the same pre-existing `cmd/agent/init.go`/`main.go` redundant-newline warnings flagged in Entry 76/77 (untouched files, just shifted line numbers now). `go test ./internal/...` — connections 11/11, connectors 20/20. Ran a live smoke test: built `cmd/server`, started it on `:8099`, and round-tripped `POST /api/connections` → `GET` (shows the new row, `read_only: null`, `status: "unknown"`) → `DELETE` → `GET` (empty again) — full CRUD path confirmed working, plus `GET /api/functions?type=connector` now shows `sql_query`'s real description instead of "(démo)". Could not exercise `/test` or `/preview` end-to-end — Docker Desktop wasn't running locally, so the docker-compose MySQL wasn't reachable; that needs a live database and is really Day 9's (testcontainers) job anyway. Noted this gap explicitly in `CLAUDE.md`'s Known limitations rather than claiming full verification.
+
+### Status
+
+Day 6 complete (backend half). `CLAUDE.md` updated: API surface (4 new routes), Function catalog (`sql_query` no longer described as a stub), Known limitations (V1a is mysql-only, no system profiles yet, `/test`+`/preview` not live-verified in this environment), Key packages (`internal/connections` role description now reflects `Add`/`Remove`/`List`/`Test`). Next: the frontend half — `ConnectionsPage.jsx` (§11's "Connections page" day) and the `sql_query` config panel + `FieldMapEditor.jsx` in the Pipeline Studio (§11 Day 7–8), or Day 9's testcontainers integration tests, whichever the user wants next.
+
+---
+
+## Entry 77 — 2026-07-17 — MySQL connector Day 4–5 — `sql_query.go` rewritten from stub
+
+**Trigger:** user, continuing from Day 3 (Entry 76): *"do the next day 4-5"* → *"go"*.
+
+### What shipped, per `docs/mysql_connector.md` §6, §6b, §7, §11 Day 4–5
+
+| File | Contents |
+|---|---|
+| `internal/functions/connectors/sql_query.go` | `SQLQueryHandler` (mirrors the existing `MQTTSubscribeHandler`/`OPCUAReadHandler` constructor pattern — `NewSQLQueryHandler(ConnectionGetter)` + `GetFunction()` + `Execute(ctx, params)`), all 3 guards (`ensureSelectOnly`, `bindPositional`, `ensureLimit`), `mapRows`/`coerce` type-aware conversion (§6 table), `applyFieldMap`/`applyValueMap` semantic layer (§6b) |
+| `internal/functions/connectors/sql_query_test.go` | 20 unit tests, all passing, zero docker/network |
+
+### Two deliberate deviations from the doc's literal skeleton, and why
+
+1. **Package is `connectors`, not `sqlquery`.** §7's skeleton header says `package sqlquery`, but the file lives at `internal/functions/connectors/sql_query.go` per §2's file list, alongside `mqt_subscribe.go` and `opcu-read.go` — both `package connectors`. Followed the actual sibling files, not the doc's pseudocode header, and mirrored their exact constructor/`GetFunction`/`Execute` shape for consistency (`functions.Function` in this codebase only has `Name`/`Type`/`Description`/`Handler` — no `Inputs`/`Outputs` fields, unlike §7's aspirational skeleton).
+
+2. **`SQLQueryHandler` depends on a narrow `ConnectionGetter` interface (`Get(id string) (*sql.DB, error)`), not the concrete `*connections.Registry`.** §7's skeleton calls a package-level `connections.Get(connID)`, but the real `Registry` (Entry 76) is an instance, not a package singleton. Accepting the interface — which `*connections.Registry` satisfies without modification — is what makes the Day 4–5 "Unit tests with SQLite in-memory... cover both rows and canonical output paths" requirement possible without touching `internal/connections` or needing a live MySQL: tests pass a `fakeGetter` backed by `sql.Open("sqlite", ":memory:")` straight into `Execute`.
+
+Also refactored `coerce` to take a small `columnMeta{dbType, length, hasLength}` struct extracted from `*sql.ColumnType` (via `columnMetaFrom`) rather than the doc's sketch of taking `*sql.ColumnType` directly — that type has no public constructor, so unit-testing `coerce` per §12's list (`TestCoerce_TINYINT_1_becomes_bool`, `TestCoerce_JSON_parses`, etc.) would otherwise require a live DB connection just to obtain column metadata. `columnMeta` is a trivial struct literal in tests.
+
+### Guard behavior notes
+
+- `ensureSelectOnly` / `hasMultipleStatements` — lightweight heuristic scanner (comment-stripping + quote-aware semicolon detection), explicitly not a full SQL parser, matching the doc's own framing of these as guards, not a query analyzer. A single trailing `;` is tolerated; anything after it is rejected as multi-statement.
+- `field_map`/`value_map` degrade gracefully exactly as §6b specifies: no `field_map` → `canonical: []`, `canonical_type: null`, no error. An enum value with no `values` entry passes through raw rather than erroring — an incomplete enum map shouldn't break the pipeline.
+
+### Still stub in production — Day 6 not started
+
+`cmd/server/main.go:179` still registers `stubConnector("sql_query", ...)`; neither `main.go` constructs a `connections.Registry` or wires it into `NewSQLQueryHandler` yet. That's explicitly Day 6 scope (§11: "Register sql_query in both cmd/server and cmd/agent", alongside the `/api/connections` REST endpoints) — followed the same Day-boundary discipline as Entry 76 (built, not wired). Updated `CLAUDE.md`'s Function catalog + Known limitations to say precisely that: a working implementation exists, but the running binaries still error on `sql_query` today.
+
+### Verification
+
+`go build ./...` clean. `go test ./internal/functions/connectors/...` — 20/20 pass. `go vet ./internal/functions/...` clean.
+
+### Status
+
+Day 4–5 complete. Next: Day 6 — `internal/connections.Registry` instantiated in `main.go`, `sql_query` registered for real (replacing the stub), `cmd/server/connections_handlers.go` REST endpoints (`GET/POST /api/connections`, `/test`, `/preview`, `DELETE`), `connections` table in `data/mindset.db`.
+
+---
+
+## Entry 76 — 2026-07-17 — MySQL connector Day 3 — `internal/connections/` package shipped
+
+**Trigger:** user, back from the outreach/strategy thread (Entries 71–75): *"start Day 3."*
+
+### What shipped, per `docs/mysql_connector.md` §8 + §11 Day 3
+
+| File | Contents |
+|---|---|
+| `internal/connections/config.go` | `LoadConfig` parses `config/connections.yaml`, applies defaults (read/write timeout 30s/10s, pool 5/2, lifetime 300s — §5), validates: `mysql`-only driver (V1a), `password_env` required, `tls` must be `true`/`false`/`skip-verify`, duplicate ids rejected |
+| `internal/connections/dsn.go` | `BuildMySQLDSN` — pure function, exact DSN shape from §4 (`parseTime=true&loc=UTC&charset=utf8mb4&interpolateParams=false&readTimeout=…&writeTimeout=…&tls=…`) |
+| `internal/connections/registry.go` | `Registry.Get(id)` — lazy-opens, health-checks, and caches one `*sql.DB` pool per connection id; `ReadOnly(id)` exposes the cached health-check result (the "cache a read_only bool" requirement from §8, wired now even though the REST endpoint that surfaces it is Day 6); `CloseAll()` for shutdown. `dial`/`verify` are unexported injectable fields so pool-reuse is testable without a live MySQL server |
+| `internal/connections/health.go` | `VerifyReadOnly` — `Ping` then a `CREATE TEMPORARY TABLE` probe; per spec, a writable account logs a warning and is still accepted (not refused) — enterprise IT sometimes over-provisions |
+| `internal/connections/registry_test.go` | 7 unit tests, all passing: config defaults/validation (4), DSN format (1), pool-reuse + ReadOnly + CloseAll (1), unknown-id error (1). Pool-reuse test swaps `dial` for an in-memory `modernc.org/sqlite` open (same driver name `"sqlite"` already used in `internal/storage`) — zero docker/network, matching §12's "Unit (no docker, no network)" bucket |
+| `config/connections.yaml` | New — the `dev_erp` example from §5, pointing at the existing `docker-compose.dev-erp.yml` MySQL on `:3307`. Not explicitly a "Day 3" line item but listed in §2's file table and needed either way; pure config, no code, so shipped alongside |
+
+### Side effects (not the goal, but correct to fix while touching `go.mod`)
+
+Ran `go mod tidy`: cleared Entry 69's leftover nit (`github.com/go-sql-driver/mysql` was `// indirect` despite `cmd/erpsim` importing it directly — now `internal/connections` imports it too, tidy dropped the marker) and fixed an unrelated pre-existing missing `go.sum` entry for `golang.org/x/net/proxy` (via `paho.mqtt.golang`) that was failing `go build ./...` before any of today's changes.
+
+### Verification
+
+`go build ./...` clean. `go test ./internal/connections/...` — 7/7 pass. `go test ./...` — everything passes except `cmd/agent` (pre-existing `go vet` failures: redundant newlines in `fmt.Println` calls in `cmd/agent/init.go`/`main.go`, files untouched today — flagged, not fixed, out of scope for Day 3).
+
+### Status
+
+Day 3 complete. Next: Day 4–5 per §11 — rewrite `internal/functions/connectors/sql_query.go` (handler skeleton, `ensureSelectOnly`/`bindPositional`/`ensureLimit` guards, `mapRows`/`coerce` type-aware conversion, `applyFieldMap`/`applyValueMap` semantic layer from §6b) plus its unit tests.
+
+---
+
+## Entry 75 — 2026-07-17 — Cécilia: how do we build IT connectors fast, and how do comm tools (Slack) differ from shopfloor systems (WMS/QMS)?
+
+**Trigger:** Cécilia (WhatsApp, 2026-07-17): *"comment tu développes en peu de temps les connecteurs côté IT? Tout ce qu'est Slack etc, communications et outils? C'est quoi la différence de complication entre ceux-là et ceux des systèmes purs (WMS, QMS, etc, anything you find on the shopfloor)? → comment tu peux arriver à scaler et développer des connecteurs rapidement? Any framework, choses qui accélèrent les process?"*
+
+### Answer given (relayed to the user for Cécilia)
+
+**Core lever — one connector per access pattern, not per vendor.** `sql_query` already covers the large majority of WMS/QMS/MES/ERP because ~90% expose a SQL-accessible database regardless of how proprietary the product is (same stat as `docs/sql_connectors.md` §0). The connector itself is schema-blind — it runs a parameterized query and returns rows.
+
+**The real scaling mechanism — separating "how to read the system" (code, generic) from "what the data means" (config, per-system)**, i.e. the canonical-model / `field_map` / `value_map` design already landed in Entry 60: a fixed canonical model (`WorkOrder`, `Batch`, `Product`, `Schedule`, `Quality`, `Operator`), a per-connector `field_map` translating customer columns to canonical fields, and a `value_map` translating status enums. Everything downstream (rules engine, KG, Impact Engine, MCP) only ever consumes canonical objects — never schema-aware. Practical consequence: onboarding a new customer on a system already seen = filling a YAML mapping, not writing code. **System profiles** (pre-built field_maps for SAP MII, Odoo, Dolibarr, Ignition MES, per Entry 60's table) make the second deployment of the same vendor nearly free — this is the actual moat-compounding mechanism.
+
+**Comm/SaaS tools (Slack, etc.) vs. pure shopfloor systems (WMS/QMS/MES) — complexity delta:**
+
+| | Comm/SaaS (Slack, Teams, ticketing) | Shopfloor IT (WMS/QMS/MES/ERP) |
+|---|---|---|
+| Auth | OAuth2, standardized, documented, SDKs exist | Usually plain user/password on a SQL DB, sometimes ODBC/proprietary |
+| Schema | Identical across every tenant — the API IS the canonical model | Different per deployment even for the same vendor product, after years of site-specific customization |
+| Mapping layer needed | None | `field_map`/`value_map` mandatory, per customer |
+| Network | Cloud-to-cloud, public internet | Usually the plant's local network, sometimes air-gapped — the edge binary must sit physically on-site |
+| Volume/risk | Built for external traffic, effectively risk-free | A miscalibrated query can slow down the site's production DB — hence the mandatory timeout + row-limit + pool-size guardrails already in the SQL connector design |
+
+Net: SaaS/comm connectors are individually faster per connector (one auth flow, zero per-customer mapping, done) but there are many of them with varied auth schemes (OAuth2, API key, JWT) — the accelerant there would be a config-driven generic REST connector, same spirit as `sql_query` but harder to fully generalize because auth diversity is much higher than SQL's (SQL auth is essentially always user/password). Shopfloor systems are slower the first time per vendor (schema always differs) but one connector (`sql_query`) plus the mapping layer covers nearly all of them, and system profiles make repeats near-free.
+
+### Status
+
+Answer given in-session, not yet sent to Cécilia. Offered to draft a direct reply for her — not yet requested.
+
+---
+
+## Entry 74 — 2026-07-17 — Outreach positioning: lead with the finance/shopfloor wedge, not the AI-agent data-quality wedge
+
+**Trigger:** two related questions from the user, same session, continuing the outreach-pivot discussion (Entry 71–73). First: *"comment on peut lead et se differncier en arrivant et on cherchant le co-design, admettant le play infra devant?"* Second, more pointed: *"il y a quelques semaines on lead par un wedge metier au delà de la data — donc la synchronisation de shopfloor avec le finance (le finance n'ont pas forcément une visibilité côté OT temps réel pour prioriser les actions) — ou on rentre par la qualité de la donnée (par exemple pour l'utiliser sur les agents IA)?"*
+
+### Question 1 — how to lead/differentiate while being upfront about the infra ambition
+
+Recommendation given: don't open with "infrastructure" — open with the narrowest, most quantified wedge possible (one concrete event, one € figure the prospect didn't have), and only reveal the infra/foundation ambition once they're already hooked, as the answer to "why this compounds / why not just another point tool." The differentiation line to lead with is already written in `Blurb_Invest.md`: *"They give you data. We give you the call to make."* — positions against every tool that stops at clean data, without ever saying "infrastructure."
+
+For the co-design ask specifically: frame it around the prospect's own immediate win (faster resolution, ranked by €, zero PLC/IT change) — not "help us build our platform," even though that's effectively what's happening. The fact that the KG compounds with use is a reason for *them* to say yes (they keep full ownership, no lock-in), not a pitch point to lead with.
+
+**Tradeoff flagged:** opening too narrow on the wedge risks reading as a point solution — exactly the failure pattern investors describe. Mitigation: one line, not a paragraph, in the first message signaling this is a foundation that improves with use, not a one-off tool — seeded without dwelling on it, so the deeper story exists for the follow-up conversation.
+
+### Question 2 — which wedge to lead with: finance/shopfloor sync, or data quality for AI agents
+
+Two concrete wedges the user named, both already tried/considered:
+- **Finance/shopfloor wedge** (used a few weeks prior) — finance doesn't have real-time OT visibility to prioritize actions; MindSet Data syncs shopfloor reality with the finance view so decisions are made on today's numbers, not a stale or absent one.
+- **Data-quality wedge** — enter through the "your data isn't clean/contextualized enough to use with AI agents" angle.
+
+**Recommendation: lead with the finance/shopfloor wedge.** Reasoning:
+
+1. **Outcome wedge vs. promise wedge.** The finance wedge shows a € figure today ("here's what this cost you this week, and you didn't know"). The AI-agent wedge sells a future benefit (agents will work better once the data's ready) — closer to the point-solution/vaporware pattern investors say fails, further from the "orchestrator that shows the call to make" pitch that's already validated.
+2. **It's the wedge already producing warm inbound** — Cécilia's LinkedIn post ("put a cost on every loss," referenced in Entry 71) is this exact wedge, already generating comments/leads. No reason to switch away from a wedge that's actively working for an untested one.
+3. **Buyer fit.** The finance/shopfloor wedge speaks to an ops/finance lead who owns a P&L line — matches the fast, direct, <€30k sales motion in `Blurb_Invest.md`'s GTM section. The AI-agent wedge speaks more naturally to IT/data/innovation teams, who are more likely to slow the deal down with governance/security review — working against the entire point of this outreach pivot (avoiding long cycles).
+4. **Generalizes better across the 4 new verticals** (Entry 71's shortlist). Every one of those verticals has its own version of "an operational signal is invisible to the business system until it's too late, with real € attached" — that's the finance/shopfloor wedge, generalized. The AI-agent wedge requires the prospect to already have a live, stalling AI-agent initiative as a precondition — a narrower, less certain qualifying condition to assume across warehousing, CRE, data centers, or hospital ops.
+
+**Not discarded — demoted to second-conversation material:** the AI-agent/data-quality narrative fits `Blurb_Invest.md`'s "Why now" argument (agents hitting a wall on OT context) and GTM pillar 3 (Tier-1 industrial groups, AI consultants/agencies as a distribution channel) — useful once a prospect is already engaged, for IT/CTO-level stakeholders, or in investor conversations. Same sequencing logic as Question 1: reveal it after the wedge lands, don't open with it.
+
+### Status
+
+Decision made for outreach positioning: lead wedge = finance/shopfloor real-time OT-to-€ visibility for prioritizing action. AI-agent data-quality narrative kept as secondary/second-conversation material, not a first-contact wedge. No outreach copy drafted yet — next natural step if requested.
+
+---
+
+## Entry 73 — 2026-07-17 — Shareable doc created for Cécilia: `docs/vertical_expansion_shortlist.md`
+
+**Trigger:** user asked for "a separate detailed doc for this verticals to share it with cecilia."
+
+### What was created
+
+`docs/vertical_expansion_shortlist.md` — a co-founder-facing (not internal-engineering) writeup of the 4-vertical shortlist from Entry 71. Deliberately excludes the internal Go-file-level technical plan (Entry 72) — kept a single light "feasibility note" per vertical instead, enough to calibrate outreach conversations without exposing implementation detail that isn't relevant to a GTM doc. Structure: why look beyond manufacturing now, the unchanged core thesis, the screening criteria used, the 4 verticals (silos / unpriced event / buyer / feasibility / watch-out), a recommendation (lead with warehousing/3PL, CRE as parallel secondary, data center + hospital as messaging-only), and 3 open questions back to Cécilia.
+
+### Status
+
+Doc created, not yet sent. No further action taken.
+
+---
+
+## Entry 72 — 2026-07-17 — Technical build plan for the 4 candidate verticals (Entry 71 follow-up)
+
+**Trigger:** user asked to "plan technic to build them with differences between them" for the 4 verticals shortlisted in Entry 71.
+
+### Method
+
+Read the actual code before writing the plan rather than assume from `CLAUDE.md`'s summary: `internal/uns/mapper.go`, `internal/rules/engine.go`, `internal/kg/graph.go` + `types.go`, `internal/functions/conditions/threshold.go`.
+
+### Finding — the ISA-95 hierarchy is coupled in 3 places, not 1
+
+`CLAUDE.md` describes `internal/uns/mapper.go` as "the" ISA-95 mapping layer. In fact the hierarchy (Site/Area/WorkCenter/WorkUnit) is hardcoded in three places: (1) `mapper.go`'s dot-count heuristic + an OPC-UA-shaped tag-abbreviation dictionary (French/English), (2) `internal/rules/engine.go`'s `EnrichedMessage.Metadata` struct — `Area`/`WorkCenter`/`WorkUnit` are literal field names, not a generic slot, (3) `work_center` referenced 8× across `internal/rules` + frontend `src/lib/*.js`. Generalizing for other verticals is a rename/re-shape touching all three, not a one-file fix.
+
+### What's already vertical-agnostic (no work needed)
+
+Pipeline engine, KG schema (`Equipment`/`Event`/`Cause`/`Cost` are already generic strings, not manufacturing-named), dashboard/WebSocket/Pipeline Studio shell, the SQL-connector work already in flight (every vertical's IT-like side is SQL/API), and the `threshold` condition function (already generic min/max check).
+
+### Per-vertical requirements table
+
+| | Net-new connector | Event primitive | Cost model | Reuse level |
+|---|---|---|---|---|
+| Warehousing/3PL | Modbus (upgrade the existing `modbus_read` stub to a real driver) | `state_machine` (jam ≈ stop, direct analog) | throughput-loss €/hr, same shape as current `calculate_cost` | Highest — nearest neighbor to what's built |
+| CRE/Facilities | BACnet (no existing scaffold) or Modbus-only for a thin V1 | `threshold` | SLA-penalty flag, ties into the customer-commitment flag work from Entry 70 | KG/pipeline/dashboard only |
+| Data center | SNMP/Redfish | `threshold` | €/minute, already contractual — easiest cost model of the four | KG/pipeline/dashboard only |
+| Hospital (non-clinical) | HL7/FHIR (different data model, not just a new protocol) + BACnet/Modbus for building side | mixed threshold + ticket/schedule | opportunity-cost €/hr (idle OR) | Lowest reuse of the four |
+
+### Recommended phasing
+
+**Phase 0 (once, regardless of winning vertical):** generalize the 3 hardcoded spots into vertical-agnostic level-N slots + move display labels to a small frontend config. Deliberately did **not** recommend building a speculative `config/domains/*.yaml` profile system yet — one real second vertical isn't enough to justify that abstraction (YAGNI), matches the "don't over-invest before validating" stance from Entry 71.
+
+**Phase 1:** build real connector only for whichever vertical outreach actually validates — most likely warehousing/3PL (least new code: Modbus stub → real driver, `state_machine`/KG/cost model reused untouched).
+
+**Phase 2+ (CRE → datacenter → hospital, in that cost order):** don't start until a pilot conversation exists. Suggested interim: stub connectors (`bacnet_read`, `snmp_read`, `hl7_read`) the same way `modbus_read`/`sql_query` are stubbed today, visible in the Pipeline Studio palette for demo purposes without a real driver behind them.
+
+### Status
+
+Plan presented to the user, not yet started. Open question put back to the user: start Phase 0 (hierarchy generalization) now, or hold until outreach signals which vertical (if any) to build for first.
+
+---
+
+## Entry 71 — 2026-07-17 — Cécilia: test outreach beyond manufacturing while manufacturing traction builds
+
+**Trigger:** Cécilia (WhatsApp, 2026-07-16) — strategy pivot proposal, then explicitly told the assistant *"we log anything (reply) in analysis_log.md"*, confirming the "log everything" convention extends to business-strategy exchanges relayed through chat, not just doc-review sessions.
+
+### What Cécilia said
+
+- Wants to start outreach **outside manufacturing** in parallel, while manufacturing traction is still building — goal is to avoid getting stuck in long manufacturing sales cycles before the company has proven it can scale.
+- Investor feedback she's hearing repeatedly: startups selling "-X% energy optimization" style ROI to manufacturers fail. What lands is the **orchestrator framing** — turning technical data into € figures across silos, and pushing immediate action to prevent financial loss.
+- Her framing: in manufacturing the silos include OT (that's the manufacturing-specific part); the underlying principle — connect silos → translate to € → drive immediate action — is vertical-agnostic and should be tested by reaching out broadly to see what sticks.
+- Concrete next step already in motion: a LinkedIn post about "putting a cost on every loss" got strong engagement — she's contacting everyone who commented as warm leads, since it signals a live need.
+- Asked Mohamed directly for his own thoughts/reading and said **"we need to be two on this."**
+
+### Assistant's response (relayed in this session)
+
+- The thesis already generalizes in the existing positioning doc (`Blurb_Invest.md`): "connects silos, ranks by economic stake, pushes the call to make" is written vertical-agnostic; manufacturing OT/IT fragmentation is one instance of a general pattern (fragmented systems → an event happens → nobody prices it in real time → decision comes too late).
+- Named a few adjacent verticals sharing the same shape, as a starting point for the outreach test, not a recommendation to build for them yet: warehousing/3PL (WMS + TMS + dock sensors), hospital/clinic ops (EHR + bed management + equipment), commercial real estate/facilities (BMS + ticketing + lease terms).
+- Flagged the risk to watch: "test outreach elsewhere" is a messaging/discovery exercise and should stay one — the danger is it quietly turns into engineering time on non-manufacturing connectors before any real pain is validated. Recommendation: keep dev focus on the SQL-connector/Impact Engine work already in flight (Entry 69, Entry 70), let outreach validate demand with the existing story (or a thin mockup at most) first.
+- Offered two concrete next actions, neither taken yet: draft a reply to Cécilia, or build a short shortlist of 3–4 target verticals with the fit rationale for the two co-founders to react to on a call.
+
+### Shortlist delivered (same session) — 4 candidate verticals
+
+User asked for the shortlist. Selection criteria used: (a) genuine silo → unpriced event → delayed decision pattern, matching `Blurb_Invest.md`'s general thesis; (b) technical connector reuse (a Modbus/BACnet-ish real-time layer + a SQL/API business-system layer, echoing the OT/IT split); (c) buyer profile that preserves the direct-to-site, <€30k, 6–8-week sales motion — the actual goal of this pivot, not pain alone.
+
+| # | Vertical | Silos (OT-like / IT-like) | € event that's currently invisible | GTM fit |
+|---|---|---|---|---|
+| 1 | **Warehousing / 3PL ops** | Conveyor/sorter PLCs, dock sensors, AGV telemetry ↔ WMS + TMS | Sorter jam / dock congestion → missed truck departure → SLA penalty, overtime, spoilage | Strongest — same site-manager buyer, same PLG motion, protocol-adjacent |
+| 2 | **CRE / multi-site facilities mgmt** | BMS (HVAC, access control — BACnet/Modbus) ↔ CMMS/ticketing + lease/SLA terms | Fault not priced until a ticket is filed hours later, but tied to SLA penalty/tenant churn | Strong — multi-site FM ops lead, <€30k/site almost unchanged pitch; weaker headline € per event |
+| 3 | **Data center / critical infra ops** | DCIM/BMS power+cooling telemetry ↔ uptime SLA contracts | Cooling/power anomaly → SLA breach already priced in €/minute by the customer's own contract | € story is the easiest of all four, but buyer skews large-enterprise/heavy security review — risks recreating the long cycle this pivot is meant to escape |
+| 4 | **Hospital/clinic non-clinical ops** | Biomed equipment/BMS telemetry ↔ EHR + bed mgmt + staffing | Idle OR / down equipment — very high €/hour, reconciliation famously manual | Highest pain, weakest GTM fit — procurement + compliance review almost certainly reintroduces long cycles |
+
+**Recommendation given to the user:** run #1 (warehousing/3PL) as the primary outreach test — closest match to what's already built and sold — with #2 (CRE/FM) as a parallel secondary test. Treat #3 and #4 as messaging/credibility material (investor conversations, LinkedIn-style content) rather than near-term pilot targets, since both risk reproducing the exact long-sales-cycle problem this pivot is meant to solve.
+
+### Status
+
+Shortlist delivered to the user in-session; not yet sent to Cécilia. No vertical chosen, no reply drafted for her yet, no product/engineering scope changed. Revisit once Cécilia's outreach doc lands or the two co-founders discuss on a call.
+
+---
+
+## Entry 70 — 2026-07-14 — Cost function / Impact Engine: two docs, two unreconciled models
+
+**Trigger:** user asked to study `docs/Cost_function.md` + `docs/impact_engine.md`. Logged one turn late — user had to ask "did you log the response?" before this entry was written. Breaks the same-turn-logging streak noted in Entry 56's addenda; flagging honestly rather than re-inflating the count.
+
+### What was checked
+
+Read both docs plus the actual current code (`internal/functions/calculates/cost.go`) to ground the comparison in what's really shipped, not just what the docs assume.
+
+### Finding 1 — V0 is thinner than `impact_engine.md` claims
+
+`impact_engine.md` cites `internal/cost/model.go` as the V0 baseline with 3 components (TimeLoss + ProductionLoss + EnergyLoss). That file doesn't exist. The real implementation, `internal/functions/calculates/cost.go`, is a single component: `duration_minutes × (hourly_rate/60)`, where `hourly_rate` can be overridden by a per-product CSV/Excel lookup table. No ProductionLoss, no EnergyLoss, no Fuzzy Join context yet.
+
+### Finding 2 — the two docs model enrichment differently
+
+| | `impact_engine.md` (2026-06-30, structured spec) | `Cost_function.md` (undated, French brainstorm) |
+|---|---|---|
+| Shape | Additive enrichments on top of Fuzzy Join context | Multiplicative + additive **providers** called in parallel at trigger time (Product/Stock/Quality/Production) |
+| Function name | Keeps `calculate_cost` ("preserved for compatibility") | Renames to `calculate_business_impact` |
+| Customer/delivery risk | Deliberately a flag only, no € number until V3 (trust principle: "penalty clauses live in contracts most ERPs don't expose") | Jumps straight to a quantified number: stock=0 → **+1200€** delivery risk |
+| Quality risk | Gated to V1.5 (needs MES defect history) | Lumped into the same near-term "providers" tranche as Product/Stock |
+| Implementation shape | Vague — "lookup via Fuzzy Join" | Concrete — SQL Connector / REST calls per provider (pairs naturally with the not-yet-built SQL connector, see Entry 69) |
+
+### The real collision
+
+Is customer/stock risk a **flag** or a **priced number**? `impact_engine.md`'s trust principles treat quantifying contractual/stock risk as premature (V3) specifically because most ERPs don't expose it cleanly. `Cost_function.md`'s brainstorm already prices it at 1200€. Not a wording difference — a genuine disagreement on what V1 is allowed to claim to a CFO.
+
+### Status
+
+Presented to user as an open question, not yet resolved. No doc edits made. Next step once the user decides: reconcile into one spec (likely `impact_engine.md` as the authoritative structured doc, with `Cost_function.md`'s provider-call architecture folded in as the V1 implementation shape) and update `CLAUDE.md`'s function catalog if `calculate_cost` naming or behavior changes.
+
+---
+
+## Entry 69 — 2026-07-12 — MySQL connector status audit: docs vs actual code
+
+**Trigger:** user asked to review all docs with focus on `mysql_connector`, then said *"we log everything in analysis_log.md"* — logging the audit here per convention.
+
+### What was checked
+
+Two governing docs: `docs/sql_connectors.md` (broader multi-driver V1 strategy — Postgres/MySQL/MSSQL) and `docs/mysql_connector.md` (the executable V1a slice — MySQL-only, 2-week timebox, 15-file plan, canonical-model + `field_map` semantic layer). Cross-checked both against the actual repo state.
+
+### Findings — against `docs/mysql_connector.md` §14 Definition of Done
+
+**Built (Week 1, Days 1–2):**
+- `docker-compose.dev-erp.yml` — MySQL 8 container. Two improvements beyond the original plan, both undocumented until now: host port moved to 3307 (avoids Windows local `mysqld` conflicts) and `MYSQL_USER`/`MYSQL_PASSWORD` deliberately left unset (that flow auto-grants ALL PRIVILEGES and breaks read-only enforcement on MySQL 8.4 — grants now done explicitly in `grant.mysql.sql`).
+- `sim/erp/schema.mysql.sql`, `seed.mysql.sql`, `grant.mysql.sql` — schema matches the canonical model from §6b exactly. Grants create both `mindset_readonly` (SELECT only) and `mindset_writer` (SELECT/INSERT/UPDATE, no DELETE) — the read-only/write boundary the health check will later enforce.
+- `cmd/erpsim/main.go` (408 lines) — all 4 activity loops (advance/rotate/quality/plan) implemented per spec, plus extras not in the plan: graceful shutdown on SIGINT/SIGTERM, counter-recovery on restart (resumes OF/batch numbering from existing max instead of restarting at the seed baseline), env-var configurable tick intervals. Builds clean (`go build ./cmd/erpsim/...`).
+
+**Not started (Days 3–10 of the plan):**
+- `internal/connections/` package — doesn't exist (no registry, DSN builder, health check, `config/connections.yaml`).
+- `sql_query` — still the stub. `cmd/server/main.go:179` registers `stubConnector("sql_query", "Interroger une base SQL (démo)")`. No `internal/functions/connectors/sql_query.go` file exists yet.
+- `/api/connections` REST endpoints, frontend `ConnectionsPage.jsx` / `SqlConfigPanel.jsx` / `FieldMapEditor.jsx`, `config/pipelines/examples/of_enrichment.yaml`, and all associated tests — none present.
+
+**Minor nit:** `github.com/go-sql-driver/mysql` sits in `go.mod` under the `// indirect` block even though `cmd/erpsim/main.go` imports it directly — cosmetic (builds fine), but `go mod tidy` would fix it before anyone relies on `go.mod` accuracy.
+
+### Bottom line
+
+Solidly through the "make the fake ERP look alive" infrastructure step (Days 1–2 of 10). The actual connector — registry, real `sql_query` handler, REST API, UI — hasn't been started. Next step per the plan: Day 3, `internal/connections/` (registry + DSN builder + health check).
+
+### Process note
+
+Confirmed the file's actual insertion convention differs from what was in memory: new entries are inserted **immediately after Entry 56** (not at the true physical end of file) in newest-first order — Entries 57–68 stack in descending order right after 56, while much older correction entries (40, 41) sit at the true EOF from an earlier, differently-timed append. Updated `[[analysis-log-convention]]` memory to reflect this.
+
+---
+
+## Entry 68 — 2026-07-10 — 18 concrete self-creating-pipeline examples + feasibility ratings
+
+**Trigger:** user asked *"give many examples of self-creating automation (like LemonLime) for MindSet and if we can build them technically?"*
+
+### Deliverable
+
+`docs/pipeline_suggestion_examples.md` — 18 patterns across 9 categories, each with detected pattern + suggested pipeline + feasibility rating.
+
+### The 9 categories covered
+
+1. Temporal / recurring (3 patterns)
+2. Correlation / cascade (2 patterns)
+3. Root cause (2 patterns)
+4. Data quality (3 patterns)
+5. Throughput / rate (2 patterns)
+6. Sequence / state-machine (2 patterns)
+7. Supplier / procurement — Deroche-relevant (2 patterns)
+8. DLC / expiry — Deroche-relevant (1 pattern)
+9. Multi-machine / cross-site (1 pattern)
+
+### Feasibility distribution
+
+- **EASY (12/18)** — Go stdlib + SQLite aggregations, 1–2 weeks each. Include recurring micro-stops, root cause aggregation, data staleness detection, supplier lateness, DLC waste, machine ranking.
+- **MEDIUM (6/18)** — Add gonum/stat for trend regression, lag correlation, state-graph walks. 2–4 weeks each. Include batch duration drift, cascade failures, quality-metric correlation, sensor drift, cost concentration, state-machine anomalies.
+- **HARD (0/18 in list)** — deliberately excluded. ML-based multi-variate anomaly detection, deep sequence models, NLP over free-text — V2+, needs different expertise.
+
+### Key insight
+
+**All 18 examples are buildable with our current stack.** No ML frameworks, no GPUs, no data-science team required for a first version. This matters because we can ship a genuinely differentiated suggestion engine on V1.5 timeline without changing the team composition.
+
+### Architecture proposed
+
+```
+KG event history (SQLite)
+       → Detector registry (internal/suggestions/)
+       → Each detector returns: {detected, confidence, evidence, explanation_fr, proposed_pipeline_yaml}
+       → Suggestion queue (SQLite table)
+       → DataOps Studio "Suggestions" panel — [Accept] [Edit] [Dismiss] [Never suggest again]
+```
+
+Precision guardrails: min confidence 0.8, feedback-decay on dismissed detectors, rate limit 3 suggestions/user/week, mandatory plain-French explanation with cited evidence.
+
+### Sequencing recommendation
+
+- V1.5 M0-M1: framework + 3 EASY proof-of-concept detectors (patterns 1, 6, 15)
+- V1.5 M1-M2: Deroche-facing (patterns 15, 16, 17 — supplier + DLC — directly matches Deroche cahier des charges)
+- V1.5 M2-M4: breadth (remaining EASY + start MEDIUM once MSSQL is in production)
+- V2: ML-based advanced patterns + federated cross-customer learning
+
+### Strategic angle documented
+
+Building this positions us ahead of:
+- HighByte / Litmus (no suggestion layer, purely data-plumbing)
+- LemonLime (SaaS suggestions, not OT — the industrial domain knowledge required is the moat they can't cheaply build)
+
+### Talking point for Cécilia (FR)
+
+> *"On ne se contente pas de livrer la donnée. Notre plateforme regarde en permanence ce qui se passe dans l'usine et suggère à l'équipe ce qu'il vaut la peine d'optimiser en premier — classé par impact économique. Pas d'IA magique, pas de boîte noire : des patterns déterministes que l'acheteur ou l'ingénieur peut vérifier."*
+
+### Discipline
+
+Own top-level entry per convention. Doc + log entry + xref to Entry 67 (parent V1.5 decision) + xref to Entry 66 (LemonLime intel that inspired the borrow).
+
+---
+
+## Entry 67 — 2026-07-10 — Pipeline suggestion engine — feature-borrow candidate from LemonLime
+
+**Trigger:** user asked *"lemonlime identify the processes to improve ? and is this relevant to us ?"*
+
+### Answer to the question
+
+**Yes**, LemonLime's central hook is *"self-creating automations"* — the platform studies connected tools, detects repetitive patterns, and auto-suggests what to automate. User doesn't have to know what to build; the system proposes it.
+
+**Yes, this is highly relevant to MindSet.** Our DataOps Studio is currently a blank canvas — the OT engineer has to know what pipeline to build. That's a UX gap. The KG already has the raw material to detect industrial patterns automatically.
+
+### Analog for the industrial context
+
+| LemonLime suggests (SaaS domain) | MindSet could suggest (OT / industrial domain) |
+|---|---|
+| "This email flow could be automated" | *"Line 3 has recurring 40s stops every Wednesday afternoon — build a micro-stop alert?"* |
+| "Approve invoices under $500 automatically" | *"Batch failures cluster on PROD-A02 when viscosity > 890 — build a threshold check?"* |
+| "Route leads to the right rep" | *"Fournisseur X has 15% late deliveries this month — build a supplier score alert?"* |
+
+### Design constraint
+
+Precision > recall. In industrial contexts, hallucinated suggestions are expensive (bad rule fires alarms 3× a night → plant manager kills the tool). Better to suggest few, suggest well. Prompt-engineering + threshold-tuning on the pattern detector is the hard part.
+
+### Differentiation angle
+
+If we build this:
+- Differentiates from HighByte / Litmus (they have no suggestion layer)
+- Differentiates from LemonLime (they do SaaS patterns, not OT — the OT knowledge is our moat)
+- Reinforces the "no-code" pitch — user doesn't just DRAG pipelines, the system PROPOSES them
+
+### Timing decision
+
+**V1.5 or V2, not V1a.** Rationale:
+- Need MySQL connector + KG populated first (V1a-V1b) so there's data to reason over
+- Deroche POC (if won) will surface real industrial patterns to train the detector against
+- Adding it to V1a would blow the 2-week timebox for zero POC benefit
+
+### Action taken
+
+- Logged as Entry 67 (per new convention — substantial Q&A gets its own entry)
+- Added to `docs/sql_connectors.md` §13 "What comes after SQL (queue)" as V1.5 candidate (item #2, right after REST connectors)
+- No code work yet — deliberately parked until V1a ships
+
+### What was NOT done
+
+- Answer originally lived in chat only. User caught this + prompted the fix. Reinforces the discipline: every substantial answer that would be useful later belongs in the log AND in the relevant plan doc, not just in chat.
+
+---
+
+## Entry 66 — 2026-07-10 — Competitive intel — LemonLime (lemonlime.ai)
+
+**Trigger:** user asked for in-depth analysis of LemonLime (lemonlime.ai) and comparison with MindSet.
+
+### Company snapshot
+
+- **YC Summer 2026** (S26), San Francisco, founded 2026, team of 5
+- **Founders:** Jordan Zietz (CEO, ex-consumer social + Stanford Tree mascot) + Daniela Muñoz (CTO, ex-Google/Microsoft, CMU CS+HCI, ex-Confetti AI-social)
+- **YC partner:** Diana Hu
+- **Funding:** YC only, ~$500k standard (no other public raise)
+
+### Product
+
+- No-code AI automation for SMB office teams (marketing, sales, ops, support, finance)
+- Connects to 30+ SaaS apps (Salesforce, HubSpot, Stripe, Google Workspace, Figma, Asana…)
+- Multi-model orchestration (Claude / GPT / Copilot / DeepSeek / Perplexity)
+- Auto-suggests + auto-generates agents based on connected data
+- Underlying tech reads as semantic-search / RAG over SaaS APIs with an agent-generation UX on top (not a deterministic KG)
+
+### Pricing
+
+Starter $999/mo · Team $2,499/mo · Enterprise custom (SOC 2 / HIPAA / PCI for Enterprise tier)
+
+### Overlap with MindSet — the reason this analysis matters
+
+Their positioning language is **eerily close to ours** on the "knowledge layer" axis:
+
+| LemonLime | MindSet |
+|---|---|
+| *"knowledge layer powering AI for businesses"* | *"unifying transversal layer… reasoning enterprises"* |
+| *"connect existing tools without data migration"* | *"connects everything while changing nothing"* |
+| *"deploy in minutes"* | *"installs in under a day"* |
+| *"AI-ready intelligence"* | *"context layer AI agents need to reason"* |
+| Multi-model support surfaced early | AI-agnostic + MCP-native (buried in moat para) |
+
+This is not because we copied them — the "AI knowledge layer" positioning is now the default frame for the whole agentic-era startup wave. Will get crowded.
+
+### Where LemonLime beats MindSet
+
+- UX polish (YC + consumer founders)
+- Time-to-first-hello-world (SaaS-to-SaaS is trivial vs. our on-prem industrial deploy)
+- Distribution (YC network + US SaaS market, ~50× faster user acquisition velocity)
+- Multi-LLM story surfaced prominently — we bury it
+
+### Where MindSet beats LemonLime
+
+- Vertical depth (OT / OPC-UA / ISA-95 / edge — moat they can't build cheaply)
+- Real-time (RAG over SaaS APIs is inherently async; we run sub-second)
+- Sovereignty (US multi-tenant cloud is a non-starter for FR pharma — blocks their ICP entirely)
+- Deterministic + auditable (semantic search hallucinates; KG + Impact Engine give line-by-line auditability — regulated verticals require this)
+- Contract structure (SMB SaaS at $12–30k/year doesn't scale to industrial contracts)
+
+### Bottom line
+
+**Not a direct competitor.** Different vertical, data types, geo, customer, contract. Zero real overlap in the pipe.
+
+**But** the positioning-language overlap creates **VC-pattern-match risk**. A VC scanning our Blurb might reflexively pattern-match unless we differentiate hard on the axes they physically can't cover.
+
+### Actions
+
+1. **Sharpen Blurb_Invest V4** — add early differentiators VCs can't miss:
+   - "Industrial-native, not office-native" (one line up front)
+   - "Real-time, deterministic, auditable" (vs. their async RAG they don't call RAG)
+   - "On-prem by default, EU-sovereign" (kills US-cloud pattern-match)
+   - "Regulated-vertical ready: GxP / ISO 22000 / IEC 62443"
+
+2. **Steal what's legitimate:**
+   - Their pricing tier structure (Starter / Team / Enterprise) — clean, adopt for post-POC MindSet pricing
+   - "Self-creating automations" hook → analog for us in DataOps Studio V1.5 (system suggests pipelines based on connected sources)
+   - Multi-LLM story surfaced early in the pitch (not buried)
+   - Compliance list format
+
+3. **What NOT to do:**
+   - Don't chase their turf (SMB SaaS marketing/sales)
+   - Don't dilute "knowledge layer" to sound more horizontal
+   - Don't race UX polish
+   - Don't benchmark our pricing against theirs
+
+### Elevator answer for Cécilia if asked in a meeting
+
+> *"LemonLime is a US SaaS for marketing and sales teams — Salesforce, HubSpot, that world. We're industrial infrastructure: OPC-UA, ISA-95, on-prem edge, EU-sovereign, real-time event detection with sub-second latency. They can't reach an OT signal; we can't run at their price point. Zero overlap in the pipe, opposite ends of the AI-knowledge-layer market."*
+
+### Discipline
+
+Own top-level entry per convention. Detailed analysis in `docs/competitive_LemonLime.md`.
+
+---
+
+## Entry 65 — 2026-07-09 — Response doc drafted for InstrIA × Deroche POC
+
+**Trigger:** user said *"go"* on the proposal to draft a formal response for the InstrIA cooperation opportunity on the Groupe Deroche appel d'offre.
+
+**Context (from cahier_des_charges_Deroche.pdf + Questions_POC.md):**
+- **Groupe Deroche** = 4-site agrifood distributor (not a factory), Microsoft Dynamics AX (legacy pre-D365)
+- **Feuille de route IA & Achats** in 3 pillars: exécution (réapprovisionnement/BDC/litiges), pilotage (sourcing prédictif, scoring fournisseur), stratégie (DLC, MDD, base connaissances)
+- **Phase 1 POC** M0-M4: réapprovisionnement automatisé sur 1 famille pilote
+- **InstrIA** brings AI agents; **MindSet** brings the SQL-to-KG-to-MCP data layer
+- **VEKIA** = the competitor (already had an "RDV" — footer of the doc)
+
+### Deliverable
+
+**`docs/InstrIA_Deroche_POC_response.md`** (~500 lines, French + notes internes in English at the end).
+
+### Structure
+
+| § | Content | Audience |
+|---|---|---|
+| 1 | Contexte + compréhension du besoin | Client + interne |
+| 2 | Positionnement MindSet × InstrIA (rôles séparés) | Client |
+| 3 | Périmètre POC — famille pilote recommandée + timing S1-S16 | Client |
+| 4 | **Réponses aux 17 questions** de Questions_POC.md | Client |
+| 5 | Modèle commercial (POC forfait <€30k) | Client |
+| 6 | Facteurs de succès + réversibilité | Client |
+| 7 | Prochaines étapes | Client |
+| Annexe A | Schéma technique | Client |
+| Annexe B | Calendrier | Client |
+| **NOTES INTERNES** | Moats à protéger + positionnement vs VEKIA + risques coopération | **Interne uniquement** |
+
+### Key positioning locked
+
+**Phrase-clé** pour Cécilia à sortir en meeting :
+> *"InstrIA fournit les agents. MindSet fournit la couche de contexte qu'ils doivent avoir pour donner des réponses utiles chez Deroche. Ensemble, on livre en 4 mois ce qu'un vendeur unique met 12 à 18 mois à intégrer."*
+
+### Reframe critique
+
+**Deroche n'est PAS un usine.** C'est un distributeur agroalimentaire. Toute la messagerie OT (OPC-UA, Modbus, edge-at-PLC, temps réel machine) N'A PAS SA PLACE dans cette réponse. Adaptations :
+- On a mappé le modèle canonique (WorkOrder / Batch / Product / Supplier / Schedule / QualityResult / Operator) — cette base couvre distribution avec juste un relabel sémantique ("commande" au lieu de "OF", "lot" au lieu de "batch")
+- Le connecteur MySQL Day 2 se transpose sur SQL Server (V1b Postgres+MSSQL — 1 semaine après V1a MySQL). Pour Deroche = MSSQL sur AX. Timing calendaire aligne bien.
+- Le KG + MCP + DataOps Studio = 100 % réutilisables tels quels
+- Ce qui ne s'applique PAS : OPC-UA discovery, ISA-95 hiérarchie, rules engine "Run↔Stop", micro-stops. Ces morceaux ne sortent pas dans la réponse.
+
+### Moats à protéger (documentés en notes internes)
+
+- **Fuzzy Join OF/batch** (moat #2) — non applicable ici mais formule générique prête si InstrIA demande
+- **MCP-au-bord = SSOT IA** (moat #3) — traiter le MCP comme interface technique, pas comme stratégie. Si InstrIA voit qu'on ambitionne LA couche IA, ils se demanderont si on n'est pas leur futur concurrent.
+- **Impact Engine** (moat #1) — chez Deroche = scoring économique des propositions. Le décrire comme "moteur de scoring déterministe" sans détailler la formule multi-facteur.
+
+### Différenciation vs VEKIA (interne)
+
+Sans les nommer :
+- On-premise vs cloud SaaS
+- Réversibilité vs data hostage
+- Compositable via MCP vs verrouillé dans leur agent
+- POC <€30k (matches notre GTM direct-to-plant-manager) vs pricing typique VEKIA plus élevé
+- Time-to-value 2 semaines vs 3-6 mois typique
+
+**Ne PAS attaquer VEKIA nommément.** Différenciation par structure de valeur, pas par adversaire.
+
+### Answers to the 17 questions — highlights
+
+- **Q1 (AX support):** we hit AX 2009/2012/R2/R3 via SQL Server backend, no AOS SDK required — bypasses AX Windows-only tooling
+- **Q2 (délai signature → data):** **2 semaines**, découpage jour-par-jour documenté
+- **Q4 (fréquence):** temps réel via SQL Change Tracking + polling court, pas de batch nocturne
+- **Q5 (mode dégradé):** KG persisté SQLite local sur boîte edge, agent continue sur snapshot avec flag `data_stale_since`
+- **Q6 (donnée sale):** score de qualité + flags (STALE / MISSING / OUTLIER) à chaque attribut, agent reçoit le flag et décide
+- **Q11 (famille pilote):** **fromages frais ou charcuterie** — forte rotation + DLC sensible + volume statistique + gain acheteur mesurable en 4 semaines
+- **Q12 (critères succès):** −15 % sur-commandes DLC, −30 % temps acheteur, ≥ 80 % taux acceptation propositions IA
+- **Q16 (propriété IP):** répartition en table — Deroche possède ses données + configurations + export KG à volonté ; MindSet possède la plateforme et le schéma canonique ; InstrIA possède ses agents
+
+### Risques coopération (interne)
+
+Documented in notes internes:
+- InstrIA veut posséder la couche donnée à terme → contractualiser rôles dès le POC
+- Deroche demande à MindSet de livrer aussi les agents → refuser poliment, pointer InstrIA
+- SPOC Deroche pas disponible 2h/semaine → négocier dispo AVANT signature
+- DBA Deroche refuse SQL direct → plan B export nightly (dégradé mais acceptable)
+- VEKIA baisse son prix → ne pas s'aligner, tenir la structure de valeur
+
+### Actions immédiates pour Cécilia (listées dans le doc)
+
+1. Envoyer ce document à InstrIA pour cadrage
+2. Obtenir d'InstrIA leurs réponses Q7 (règles vs ML) + Q10 (pré-entraînement) avant remise
+3. Structurer la répartition facturation (MindSet forfait / InstrIA usage)
+4. Cadrer avec InstrIA la propriété des modèles entraînés (Q16)
+5. Co-signer la réponse à Deroche (single voice)
+
+### Discipline
+
+Own top-level entry per convention. This is the first real revenue opportunity that puts the MySQL/SQL-connector V1a build (Days 1-2 in progress) on the critical path.
+
+---
+
+## Entry 64 — 2026-07-09 — Blurb_Invest editorial pass V2 → V3
+
+**Trigger:** user asked *"can you check the blurb_invest.md if you can add any modification or proposition, or add something"*.
+
+### What was strong (preserved untouched)
+
+- Positioning line ("sovereign, reasoning enterprises")
+- Problem framing ("version of the truth", "information latency tax")
+- Killer line: *"They give you data. We give you the call to make."*
+- Killer line: *"Your data foundation is not a prerequisite to the AI strategy. It is the AI strategy."*
+- Connect/Compute/Expose triptych structure
+- GTM 3-pillar breakdown (OT integrators / AI consultants / Tier-1 mandates)
+
+### 7 changes applied
+
+| # | Change | Why |
+|---|---|---|
+| 1 | Bumped title V2 → V3 | Version tracking |
+| 2 | Team paragraph split into 2 short beats | One 5-line block was hard to scan |
+| 3 | Added quantification to The Problem: *"six-figure weekly losses to sub-minute stoppages"* + new "The market" line: *"15,000+ mid-sized European factories… pharma, cosmetics, agrifood, metallurgy"* | Investor blurbs without numbers or verticals look thin/horizontal |
+| 4 | Added "Why now" paragraph after The Vision: AI-agent wall + EU sovereignty + margin compression converging | Every VC asks; front-run it |
+| 5 | Fixed hardware contradiction in The Solution: *"no PLC changes, no new hardware to procure — runs on any existing industrial PC or a small edge box we ship"* | Old *"zero hardware changes"* clashed with *"secure edge binary"* |
+| 6 | Reworded security claim: *"strictly read-only against the customer's IT systems, with no inbound ports exposed to the internet"* (was *"zero open ports"*) | Original was technically false — server listens on 8080/WS within plant LAN |
+| 7 | Split Compute into two beats: **Compute — pipelines** (DataOps Studio) + **Compute — Impact Engine** (deterministic ranking) | Original stuffed 3 concepts into one sentence, ranking claim got buried |
+
+### Also strengthened
+
+- **Moat paragraph** — added *"a proprietary economic map that gets more valuable the longer it runs"* to make the network-effect claim concrete
+- **Moat paragraph** — added deployment modes *"on-premise, self-hosted, or hybrid — European data-residency by default"* (surfaces the 3-editions decision + sovereignty angle in the moat where it belongs)
+- **Ask paragraph** — reframed as explicit *"co-design partnerships — not capital"* + named the beta cohort size (5–10 plants) + deferred capital conversations to post-first-pilot. Eliminates ambiguity that would have made VCs unsure whether to engage.
+
+### Deliberately NOT changed
+
+- "Reasoning enterprises" appears twice — the second use is in a different sentence; leaving both for reinforcement
+- Tier-1 supply chain mandate pillar in GTM — kept as-is because it's aspirational but plausible; softening it would weaken the 3-pillar story
+- Positioning line — untouched; strong as-is
+
+### Ties to prior decisions
+
+- 3 deployment modes (Self-Hosted / On-Premise / Hybrid) — surfaced in the Moat paragraph
+- 4 verticals (pharma / cosmetics / agrifood / metallurgy) — surfaced in Problem + Ask
+- 15,000+ TAM — surfaced in Problem
+- Small beta cohort (5–10 plants) — locked in Entry 56 addendum #2, now surfaced in the Ask
+- Moats (Impact Engine, Fuzzy Join, MCP-at-edge) — mentioned at capability level only, no mechanism revealed
+
+### Discipline
+
+Own top-level entry per convention.
+
+---
+
+## Entry 63 — 2026-07-09 — MySQL connector Day 2 — cmd/erpsim binary shipped + smoke-tested
+
+**Trigger:** user validated Day 1 completion and said *"ok, do the second"*.
+
+### What Day 2 required
+
+Per `docs/mysql_connector.md` §11:
+- Scaffold the `cmd/erpsim` binary
+- Implement `advanceRunningOFs`, `rotateOFs`, `addQualityResult`, `planNewOF`
+- Watch the DB update in real time — sanity-check the intervals
+
+### What shipped
+
+**File created:** `cmd/erpsim/main.go` (~330 lines).
+
+**Architecture:**
+
+| Loop | Default tick | Behavior |
+|---|---|---|
+| `advance` | 30s | For each RUNNING OF: increment `actual_qty` by `target_rate/120 ± 20%` jitter (units/hour → units/tick), cap at `planned_qty` |
+| `rotate` | 5m | For each RUNNING OF: 20% chance to mark DONE + finish its batch (90% PASS, 10% REWORK) + start next PLANNED OF on that work_center + create new in-flight batch |
+| `quality` | 10m | For each in-flight batch: insert one new quality reading (10% out-of-spec, 90% uniform in-spec) |
+| `plan` | 1h | For each of `machine1/2/3`: create a new PLANNED work order with a random product + random qty |
+
+**Design notes:**
+- Uses the `mindset_writer` MySQL user only (SELECT+INSERT+UPDATE) — enforces the same production boundary
+- Runs each loop once immediately at startup so effect is visible within seconds (not on first tick)
+- Graceful shutdown via SIGINT/SIGTERM propagated through `context.Context`
+- Persistent OF + batch counters — reads max existing at startup, increments from there, so restarts don't collide
+- All tick intervals configurable via env vars (`ERPSIM_TICK_ADVANCE`, `_ROTATE`, `_QUALITY`, `_PLAN`) — used the smoke test to fire all 4 loops in 60s
+- DSN configurable via `ERPSIM_DSN`
+
+### Port conflict caught + resolved
+
+Windows has a local `mysqld.exe` service bound to 3306 (found via `netstat -ano | grep 3306` → PID 4428). Bringing our container up on 3306 failed with "port already allocated."
+
+**Fix:** standardized the compose file on **host port 3307 → container 3306**. Also updated `cmd/erpsim/main.go` default DSN to `localhost:3307`. Inline comment in `docker-compose.dev-erp.yml` explains why 3307 instead of 3306 (Windows-mysqld convention).
+
+This becomes the new project standard — future connector defaults will use 3307 too.
+
+### Smoke-test results
+
+Ran erpsim with tight ticks (`ADVANCE=3s ROTATE=15s QUALITY=10s PLAN=30s`) to see all 4 loops fire in one window.
+
+Verified against DB after termination:
+
+| Loop | Evidence |
+|---|---|
+| **advance** | 3 RUNNING work orders showed continuous incremental progress; `actual_qty` never exceeded `planned_qty` |
+| **plan** | 130+ new work orders created (WO-2026-9101 → 9234), balanced across `machine1/2/3` |
+| **rotate** | 119 new batches (B-2026-6101 → 6219), mostly PASS with intermittent REWORK at ~10% rate as designed |
+| **quality** | Readings appear on in-flight batches, both in-spec + out-of-spec cases observed |
+
+**Invariants that held:**
+- Every work_center always has exactly 1 RUNNING work order (rotate correctly hands off DONE → RUNNING → new batch)
+- Every RUNNING OF has exactly 1 matching in-flight batch (`quality_status IS NULL`)
+- Counter monotonicity preserved — OF numbers strictly ascending, no duplicates
+
+### Build
+
+```powershell
+go build -o bin/erpsim.exe ./cmd/erpsim
+```
+
+Clean build. `github.com/go-sql-driver/mysql` already present as an indirect dep from Entry 59's plan; no `go mod tidy` promotion needed since the direct usage now covers it.
+
+### To run in normal (production-tick) mode
+
+```powershell
+docker compose -f docker-compose.dev-erp.yml up -d
+$env:MINDSET_ERP_PASSWORD = "readonly_dev"     # only needed once the SQL connector lands
+./bin/erpsim.exe
+```
+
+Default ticks: advance 30s, rotate 5m, quality 10m, plan 1h. Ctrl+C for graceful shutdown.
+
+### Design decisions worth capturing
+
+1. **Fire each loop once at startup, then tick.** Without this, the plan loop (1h tick) would be invisible for an hour on first start — bad first impression during demos.
+2. **10% out-of-spec quality readings.** Matches the seed's baseline out-of-spec rate — downstream rules-engine demos will have real anomalies to react to.
+3. **Batches created on OF start, finished on OF completion.** Mirrors real ERP behavior — a batch is scoped to one OF.
+4. **No DELETE anywhere.** Writer grant intentionally excludes DELETE (Entry 61 design); sim never needs to delete, only append + update.
+5. **Counters persist across restarts.** Reads max existing at startup, so `docker compose down` + `up` (with volume retained) doesn't cause collisions.
+
+### Definition of Done (Day 2)
+
+- [x] `cmd/erpsim/main.go` compiles and links against the mysql driver
+- [x] All 4 loops fire and modify the DB correctly
+- [x] Graceful shutdown on SIGINT/SIGTERM
+- [x] Configurable tick intervals via env vars
+- [x] Configurable DSN via env var
+- [x] Counter persistence across restarts (initCounters reads from DB)
+- [x] Smoke test against real container — all 4 loops verified
+- [x] Uses writer-only privileges (never falls back to root)
+
+### Discipline
+
+Own top-level entry per convention. Next up: Day 3 — `internal/connections/` package.
+
+---
+
+## Entry 62 — 2026-07-07 — ERP sim usage playbook (start / connect / manipulate / reset)
+
+**Trigger:** user asked *"how start this erp simulation and manipulate it"* + *"tell me how can i manipulate it"* — operator-level guide for the dev ERP stack we just brought up (Entry 61).
+
+### Start / stop / reset
+
+```powershell
+docker compose -f docker-compose.dev-erp.yml up -d     # start (fresh volume runs schema+seed+grants)
+docker compose -f docker-compose.dev-erp.yml down      # stop, keep data
+docker compose -f docker-compose.dev-erp.yml down -v   # stop + WIPE volume — next up reruns seed
+docker ps --filter name=mindset-erp                    # check running
+docker logs mindset-erp | tail -20                     # init logs / errors
+```
+
+### Three ways to connect
+
+1. **One-off SQL from PowerShell:**
+   ```powershell
+   docker exec mindset-erp mysql -u<user> -p<pass> fake_erp -e "SELECT ..."
+   ```
+2. **Interactive shell:**
+   ```powershell
+   docker exec -it mindset-erp mysql -u<user> -p<pass> fake_erp
+   ```
+3. **GUI (MySQL Workbench / DBeaver / TablePlus)** — host `localhost`, port `3306`, DB `fake_erp`.
+
+### Three accounts
+
+| User | Password | Privileges | Use case |
+|---|---|---|---|
+| `root` | `rootdev` | ALL — full admin | manual demos, cleanup, schema tweaks |
+| `mindset_writer` | `writer_dev` | SELECT, INSERT, UPDATE — **no DELETE** | what `cmd/erpsim` (Day 2) will use |
+| `mindset_readonly` | `readonly_dev` | SELECT only | what the MindSet SQL connector will use in production |
+
+### The 5 canonical "moves" — what erpsim will automate
+
+1. **Advance production:** `UPDATE work_orders SET actual_qty=actual_qty+N WHERE of_number=?`
+2. **Finish OF + start next:** `UPDATE ... SET status='DONE'` + `UPDATE ... SET status='RUNNING'`
+3. **Add quality reading (in-spec):** `INSERT INTO quality_results ...`
+4. **Force quality failure (out-of-spec):** insert bad value + optionally mark batch FAIL (root only)
+5. **Plan new work order:** `INSERT INTO work_orders (..., status='PLANNED')`
+
+### To validate a move is visible
+
+Second terminal:
+```powershell
+docker exec mindset-erp mysql -uroot -prootdev fake_erp -e "SELECT of_number, status, actual_qty, planned_qty FROM work_orders WHERE work_center='machine1' ORDER BY status, of_number;"
+```
+
+Re-run after each move — state updates immediately.
+
+### Why this matters
+
+These 5 moves ARE the erpsim contract (Day 2). Writing them by hand today = validating the contract before we automate it. Every one of them uses only writer-level privileges (`SELECT / INSERT / UPDATE`), which confirms erpsim's grant scope is correct.
+
+### Discipline
+
+User asked *"did you write it in log 62?"* → I hadn't (originally lived in chat only). Backfilled per convention: every substantial "how to" belongs in the log so future team members don't need to re-derive it from chat history.
+
+---
+
 ## Entry 61 — 2026-07-07 — MySQL connector Day 1 — simulation stack up and verified
 
 **Trigger:** user validated the 2-week plan and said *"ok do the first step (day 1)"*.

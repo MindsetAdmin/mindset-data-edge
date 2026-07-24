@@ -1,0 +1,341 @@
+{
+  "nav": {
+    "overview": "Overview",
+    "connectors": "Connectors",
+    "compose": "Compose",
+    "pipelines": "Pipelines",
+    "dashboards": "Dashboards",
+    "kg": "Knowledge Graph"
+  },
+  "common": {
+    "loading": "Loading…",
+    "delete": "Delete",
+    "save": "Save",
+    "saving": "Saving…",
+    "cancel": "Cancel",
+    "run": "Run",
+    "close": "Close",
+    "yes": "Yes",
+    "no": "No",
+    "edit": "Edit",
+    "search": "Search…",
+    "confirm": "Confirm"
+  },
+  "overview": {
+    "functionsAvailable": "Available functions",
+    "subtitle": "Build industrial pipelines visually, run them, and explore the knowledge graph.",
+    "serverDownHint": "is the API server running on :8080?",
+    "getStarted": "Get started",
+    "stepConnectors": "Choose a data source",
+    "stepCompose": "Build the pipeline (drag & drop)",
+    "stepPipelines": "Load / run a pipeline",
+    "stepDashboards": "View real-time metrics",
+    "stepKg": "Explore relationships"
+  },
+  "connectors": {
+    "title": "Connectors",
+    "subtitle": "Click a connector to access its configuration.",
+    "comingSoon": "coming soon"
+  },
+  "sqlConnections": {
+    "title": "SQL Connections",
+    "subtitle": "Define read-only connections.",
+    "notTested": "not tested",
+    "readOnly": "read-only",
+    "writeAccess": "write access",
+    "countConfigured": "{{count}} connection(s) configured",
+    "none": "No connection defined. Create one below.",
+    "connect": "Connect",
+    "noDatabaseVisible": "No database visible to this user.",
+    "tableCount": "({{count}} table(s))",
+    "newConnection": "New connection",
+    "fieldId": "ID",
+    "fieldName": "Display name",
+    "fieldHost": "Host",
+    "fieldPort": "Port",
+    "fieldDatabase": "Database",
+    "fieldUsername": "Username",
+    "fieldPasswordEnv": "Environment variable (password)",
+    "advancedOptions": "Advanced options (timeouts, pool)",
+    "fieldReadTimeout": "Read timeout (s)",
+    "fieldWriteTimeout": "Write timeout (s)",
+    "fieldMaxOpenConns": "Max open connections",
+    "fieldMaxIdleConns": "Max idle connections",
+    "fieldMaxLifetime": "Max lifetime (s)"
+  },
+  "mqtt": {
+    "title": "MQTT Connection",
+    "subtitlePre": "The MQTT broker is shared across the whole platform (a single connection, configured in",
+    "subtitleMid": "). Pick the topic to use here, then configure the",
+    "subtitlePost": "node in Compose.",
+    "unknownBroker": "Unknown broker",
+    "connected": "connected",
+    "disconnected": "disconnected",
+    "activeTopics": "Active topics ({{count}})",
+    "noMessages": "No message received yet. Start the agent or an OPC-UA connection to see topics appear here.",
+    "triggerConfig": "Trigger configuration",
+    "qos0": "0 — at most once",
+    "qos1": "1 — at least once",
+    "qos2": "2 — exactly once",
+    "triggerHintPre": "Open",
+    "triggerHintMid": ", select",
+    "triggerHintPost": "on the trigger node, and carry these values over."
+  },
+  "opcuaConnect": {
+    "title": "Dynamic OPC-UA connection",
+    "subtitlePre": "Configure the connection, discover the tags, then choose how each data point flows. ",
+    "subtitleMid": " data is usable in every function; ",
+    "raw": "raw",
+    "subtitlePost": " data is stored only.",
+    "connectHint": "Connect to an OPC-UA server to discover its tags."
+  },
+  "opcuaPanel": {
+    "title": "OPC-UA Connection",
+    "connectFailed": "Connection failed.",
+    "fieldEndpoint": "Endpoint (URL)",
+    "fieldSecurityMode": "Security mode",
+    "fieldSecurityPolicy": "Security policy",
+    "fieldUsername": "Username (optional)",
+    "fieldPassword": "Password (optional)",
+    "fieldSessionTimeout": "Session timeout (s)",
+    "securityWarning": "Sign / SignAndEncrypt modes require a client certificate (not yet configured). Use \"None\" for now.",
+    "reconnect": "Reconnect",
+    "disconnect": "Disconnect"
+  },
+  "opcuaTags": {
+    "title": "Discovered tags",
+    "discovering": "Discovering…",
+    "rediscover": "Rediscover",
+    "discover": "Discover tags",
+    "selectAtLeastOne": "Select at least one tag in ISA-95.",
+    "filterByName": "Filter by name…",
+    "allIsa95": "All to ISA-95",
+    "clear": "Clear",
+    "value": "Value",
+    "publishIsa95Title": "Publish in ISA-95 (usable in functions)",
+    "confidenceTitle": "Confidence score of the auto-generated ISA-95 mapping",
+    "pendingTitle": "Below the auto-validation threshold — will be pending in the Knowledge Graph",
+    "noneMatchFilter": "No tag matches the filter.",
+    "isa95Legend": "= usable in functions (raw storage happens automatically for any selected tag)",
+    "applying": "Applying…",
+    "apply": "Apply",
+    "noneDiscovered": "No tag discovered on this server."
+  },
+  "pipelines": {
+    "running": "Running…",
+    "nodesOk": "{{status}} {{ok}}/{{total}} nodes OK",
+    "load": "Load",
+    "functionCount": "{{count}} function(s)",
+    "subtitle": "Your pipelines run in the engine and appear in the Knowledge Graph. Templates are starting points to load into Compose.",
+    "mine": "My pipelines",
+    "noneCreated": "No pipeline created. Build one in Compose, or load a template below.",
+    "templates": "Templates (examples)"
+  },
+  "dashboard": {
+    "site": "Site",
+    "status": "Status",
+    "connectedState": "Connected",
+    "disconnectedState": "Disconnected",
+    "offline": "offline",
+    "lastUpdate": "Updated",
+    "today": "today",
+    "totalCost": "Total cost",
+    "timeLost": "Time lost",
+    "availability": "Availability",
+    "trsProxy": "TRS (avail.)",
+    "recentEvents": "Recent events",
+    "noEvents": "No event.",
+    "microStop": "Micro-stop",
+    "machineStatus": "Machine status (per machine, today)",
+    "noMachines": "No machine.",
+    "noMachineSelectedActive": "No selected machine active.",
+    "running": "Running",
+    "stopped": "Stopped",
+    "activeProduction": "Active production (ERP)",
+    "product": "Product",
+    "statusCol": "Status",
+    "otLink": "OT Link",
+    "linked": "linked",
+    "notLinked": "not linked",
+    "noOtNodeMatch": "No OT Equipment node matches this work_center",
+    "machineTimeline": "Machine timeline",
+    "vsYesterday": "vs yesterday",
+    "uncategorized": "Uncategorized",
+    "noTransitionHistory": "No transition history."
+  },
+  "builder": {
+    "value": "value",
+    "default": "default",
+    "validateTitle": "Please give your pipeline a title (e.g. \"Micro-stop Detection\").",
+    "validateName": "Please give your pipeline a name. The name will be used as its unique identifier.",
+    "validateNoTrigger": "No connector (trigger) found. Please add a connector in the ENTRÉE zone.",
+    "validateMqttTopic": "Please select a topic for \"mqtt_subscribe\".",
+    "validateOpcuaTagTrigger": "Please select at least one tag for \"opcua_read\".",
+    "validateNoSteps": "Add at least one step in the CŒUR zone — its result will be published automatically.",
+    "validateStateMachine": "Please select a machine for \"state_machine\".",
+    "validateOpcuaTagStep": "Please select at least one tag for \"opcua_read\".",
+    "savedMsg": "Pipeline \"{{name}}\" saved — visible in the Knowledge Graph.",
+    "loadedMsg": "Pipeline \"{{name}}\" loaded — reconfigure inputs/outputs.",
+    "saveBeforeRun": "Save the pipeline before running it.",
+    "nodesOkShort": "nodes OK",
+    "connectorAppliedMsg": "Connector \"{{name}}\" applied to the trigger.",
+    "pipelineName": "Pipeline name",
+    "function": "Function",
+    "new": "New",
+    "loadEllipsis": "Load…",
+    "addFunction": "Add a function",
+    "duplicateTitle": "Duplicate pipeline",
+    "duplicateBody": "A pipeline with this configuration already exists: \"{{name}}\".",
+    "editExisting": "Edit the existing one",
+    "renamedMsg": "Renamed — click Save.",
+    "newVersion": "New version"
+  },
+  "nodeConfig": {
+    "selectNode": "Select a node to configure it.",
+    "title": "Configuration",
+    "nodeId": "Node ID",
+    "connector": "Connector",
+    "connectorHelp": "Data source that triggers the pipeline.",
+    "name": "Name",
+    "nameHelp": "Node's display name.",
+    "parameters": "Parameters",
+    "field": "field",
+    "noParameters": "No parameter.",
+    "choose": "Choose",
+    "deleteNode": "Delete node",
+    "customLabel": "custom {{key}}",
+    "noMachineDiscovered": "(no machine discovered)",
+    "filterTags": "filter tags…",
+    "selectAll": "Select all",
+    "deselectAll": "Deselect all",
+    "noTagAgent": "No tag (the agent must be running).",
+    "tagsSelected": "{{count}} tag(s) selected",
+    "manual": "Manual",
+    "hourlyRateSource": "Hourly rate source",
+    "fromAgentYaml": "From",
+    "override": "override",
+    "chooseRateTag": "(choose a tag containing the rate)",
+    "currency": "Currency",
+    "noValidRow": "No valid row (expected columns: Product, Cost per Hour (€/h)).",
+    "unreadableFile": "Unreadable file:",
+    "perProductRates": "Per-product rates (CSV / Excel)",
+    "productsLoaded": "{{count}} product(s) loaded",
+    "rateHint": "The per-product hourly rate is chosen based on the event's",
+    "rateHintPost": "field (otherwise, the rate above).",
+    "costPreview": "Cost preview ({{rate}} €/h)"
+  },
+  "sqlConfig": {
+    "params": "Parameters (:name)",
+    "param": "parameter",
+    "noParams": "None — the query doesn't use a :placeholder.",
+    "connection": "Connection",
+    "chooseConnection": "(choose a connection)",
+    "noConnectionPre": "No connection defined. Add one in",
+    "sqlQuery": "SQL query (SELECT only)",
+    "paramHintPre": "Use",
+    "paramHintPost": "for parameters. Read-only — INSERT/UPDATE/DELETE and multi-statement queries are rejected.",
+    "timeout": "Timeout (s)",
+    "limit": "Limit (rows)",
+    "canonicalType": "Canonical type (optional)",
+    "previewing": "Previewing…",
+    "previewButton": "Preview (5 rows)",
+    "rowCount": "{{count}} row(s)",
+    "noRows": "No row."
+  },
+  "fieldMap": {
+    "title": "field_map (canonical model)",
+    "hint": "Optional. Translates your columns to the canonical model (of_number, product_code, status…) — the Rules Engine, the KG, and the Impact Engine will only ever see these names.",
+    "noMapping": "No mapping — the raw results (rows) will be used as-is.",
+    "simple": "simple",
+    "enum": "enum",
+    "sourceColumnEx1": "source column (e.g. wo_no)",
+    "sourceColumnEx2": "source column (e.g. st)",
+    "addValue": "value"
+  },
+  "liveData": {
+    "title": "Live data",
+    "others": "others",
+    "chooseTags": "Choose one or more tags to view live (\"+ tag\" button).",
+    "waitingForValues": "Waiting for new values… (the agent must be publishing)",
+    "pickerTitle": "Choose a tag to display"
+  },
+  "pickerModal": {
+    "defaultCustomLabel": "Custom value",
+    "noResults": "No result.",
+    "use": "Use"
+  },
+  "functionDocs": {
+    "mqtt_subscribe": {
+      "description": "Subscribes to an MQTT topic — this is the pipeline's trigger.",
+      "fields": {
+        "topic": { "label": "Topic", "help": "MQTT topic to listen on." },
+        "qos": { "label": "QoS", "help": "MQTT quality of service (0, 1, or 2)." }
+      }
+    },
+    "opcua_read": {
+      "description": "Reads one or more values from an OPC-UA server.",
+      "fields": {
+        "node_id": { "label": "Node ID", "help": "ID of the OPC-UA node to read." },
+        "endpoint": { "label": "Endpoint", "help": "OPC-UA server URL." },
+        "timeout": { "label": "Timeout (ms)", "help": "Max read delay in milliseconds." }
+      }
+    },
+    "modbus_read": { "description": "Reads from a Modbus device (demo).", "fields": {} },
+    "sql_query": {
+      "description": "Runs a read-only, parameterized SELECT against a SQL connection. Usable as a trigger or as a mid-pipeline enrichment node.",
+      "fields": {}
+    },
+    "state_machine": {
+      "description": "Detects Run ↔ Stop transitions and triggers on stops.",
+      "fields": {
+        "machine_id": { "label": "Machine", "help": "Machine to monitor (from OPC-UA discovery)." }
+      }
+    },
+    "filter": {
+      "description": "Keeps or rejects data based on a condition.",
+      "fields": {
+        "field": { "label": "Field", "help": "Field to filter on." },
+        "operator": { "label": "Operator", "help": "eq, ne, gt, lt, contains." },
+        "value": { "label": "Value", "help": "Comparison value." }
+      }
+    },
+    "calculate_duration": {
+      "description": "Computes the duration between a stop's start and end.",
+      "fields": {}
+    },
+    "calculate_cost": {
+      "description": "Computes the cost in euros of a stop from its duration.",
+      "fields": {
+        "hourly_rate": { "label": "Hourly rate (€/h)", "help": "Machine cost per hour." },
+        "currency": { "label": "Currency", "help": "EUR, USD, or GBP." }
+      }
+    },
+    "threshold": {
+      "description": "Checks whether a duration falls within a range (micro-stop window).",
+      "fields": {
+        "min": { "label": "Min (s)", "help": "Minimum duration in seconds." },
+        "max": { "label": "Max (s)", "help": "Maximum duration in seconds." }
+      }
+    },
+    "add_to_dashboard": {
+      "description": "Pins the data or event onto the Dashboard.",
+      "fields": {
+        "label": { "label": "Label", "help": "Widget's display name." },
+        "kind": { "label": "Type", "help": "\"value\" for a number, \"event\" for an event." }
+      }
+    }
+  },
+  "palette": {
+    "title": "Component palette",
+    "loadingFunctions": "Loading functions...",
+    "hint": "Drag a function onto the canvas, connect the nodes, then Save."
+  },
+  "category": {
+    "connectors": "Connectors",
+    "transforms": "Transforms",
+    "calculates": "Calculations",
+    "conditions": "Conditions",
+    "outputs": "Outputs",
+    "other": "Other"
+  }
+}

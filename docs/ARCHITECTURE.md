@@ -123,26 +123,29 @@ pure‑Go (`modernc.org/sqlite`) so binaries are self‑contained (no CGO).
 | `uns` | `mapper.go` (tag → ISA‑95 normalization) + `contextualizer.go` (raw→site). |
 | `rules` | `engine.go` (Run/Stop detection, micro‑stop events) + `state.go` (StateStore). |
 | `functions` | Function **registry** + types; the catalog of pipeline building blocks. |
-| `functions/{connectors,transforms,calculates,conditions,outputs}` | Concrete functions. |
+| `functions/{connectors,transforms,calculates,conditions,outputs}` | Concrete functions. `sql_query` is fully implemented (not a stub) — see §4.4. |
 | `pipeline` | `types.go`, `loader.go` (YAML), `registry.go`, `engine.go` (topological exec), `builder.go`. |
-| `kg` | Knowledge Graph: `graph.go` (domain CRUD), `builder.go` (technical graph), `subscriber.go` (auto‑enrich), `types.go`. |
+| `kg` | Knowledge Graph: `graph.go` (unified CRUD, category‑tagged), `builder.go` (platform‑category rebuild), `subscriber.go` (auto‑enrich business category from micro‑stops), `types.go`. See §4.6 — this is now **one graph**, not two. |
 | `storage` | SQLite store + schema. |
+| `connections` | `Registry` pooling `*sql.DB` per SQL connection (MySQL only) for `sql_query`; lazy‑open + verify, runtime add/remove via `/api/connections`, `password_env` indirection (no inlined secrets). |
+| `e2e` | Build‑tagged integration tests (`-tags=integration`) running `sql_query` against a real MySQL via testcontainers. |
 
 ### 4.4 The function catalog
 | Function | Type | Purpose |
 |---|---|---|
 | `opcua_read` | connector | Read a value from an OPC‑UA node |
 | `mqtt_subscribe` | connector | Subscribe to an MQTT topic (pipeline trigger) |
-| `modbus_read`, `sql_query` | connector | **demo stubs** (registered for the picker) |
+| `modbus_read` | connector | **demo stub** — errors if executed |
+| `sql_query` | connector | **Fully implemented**, not a stub. Read‑only parameterized SELECT against a pooled MySQL connection (`internal/connections.Registry`); type‑coerces results and, with `field_map`/`value_map` configured, also returns a `canonical` copy whose object set aligns with ISA‑95's information model (`docs/mysql_connector.md` §6b; naming precision decided in `docs/analysis_log.md` Entry 92 — "aligns with," never "compliant," since the B2MML wire format isn't adopted). No `{{ trigger.field }}` templating — `params` are static values only. |
 | `state_machine` | transform | Detect Run↔Stop transitions |
-| `uns_mapper` | transform | Normalize a tag to ISA‑95 |
 | `filter` | transform | Keep/drop by condition |
 | `calculate_duration` | calculate | Duration between start/stop |
 | `calculate_cost` | calculate | € cost from duration × hourly rate |
 | `threshold` | condition | Is value within [min,max]? (micro‑stop window) |
-| `mqtt_publish` | output | Publish to an MQTT topic |
 | `add_to_dashboard` | output | Pin the data/event onto the Dashboard (`mindset/dashboard/<label>`) |
 | `kg_save` | output | Save to KG — **not** in the server palette (KG is automatic) |
+
+**Removed (`docs/analysis_log.md` Entry 119):** `uns_mapper` (duplicated what `OPCUAManager.route()` already does automatically) and `mqtt_publish` (a pipeline's terminal node now auto‑publishes to MQTT without an explicit node — see §4.5).
 
 Outputs are **sinks**: in the builder they have an input port only (no output
 port). `calculate_cost` supports a rate **source** (Manual / from `agent.yaml` /
@@ -153,30 +156,34 @@ from a tag) and a per‑product **rate table** uploaded from CSV/Excel
 A pipeline is YAML in `config/pipelines/` with a **trigger** + **nodes** (each has
 `function`, `config`, `depends_on`). The engine (`pipeline/engine.go`) runs nodes
 in dependency order (a dependency that isn’t a node — e.g. `"trigger"` — counts as
-satisfied). Built‑ins:
-- `microstop_detection` — `mqtt_subscribe → state_machine → calculate_duration → threshold → mqtt_publish`
-- `opcua_to_uns` — `mqtt_subscribe → uns_mapper → mqtt_publish`
-- `cost_calculation` — `mqtt_subscribe → calculate_cost → mqtt_publish`
+satisfied). After a successful run, the pipeline's declared `output` node's result
+auto‑publishes to MQTT (`cmd/server/pipeline_output.go`) — topic from the optional
+`output_topic` YAML field if set, else auto‑derived as
+`mindset/pipelines/<id>/output`. No output node required for this. Built‑ins:
+- `microstop_detection` — `mqtt_subscribe → state_machine → calculate_duration → threshold` (auto‑publishes to `mindset/events/micro-stop`)
+- `cost_calculation` — `mqtt_subscribe → calculate_cost` (auto‑publishes to `mindset/events/micro-stop-cost`)
 
-### 4.6 Knowledge Graph: two graphs
-- **Technical graph** (`kg/builder.go`, `/api/kg/technical`) — the *architecture*:
-  Connections, Topics, Pipelines, Dashboards. Derived **only from the pipelines you
-  build** (empty until you create one; the shipped examples don't appear).
-  **External‑only model**: a Pipeline node links to connections/topics/dashboards
-  and carries a `functions` count — it does **not** expose its internal functions.
-  Pipelines with the **same function signature** are **grouped** into one node that
-  lists all their tags (property `tags`).
-- **Domain graph** (`kg/graph.go`, `/api/kg/domain`) — the *data*: `Equipment`,
-  `Event` (micro‑stops), `Cause`, `Cost` nodes with `occurred_at` / `caused_by` /
-  `costs` edges.
+### 4.6 Knowledge Graph: one graph, two categories (updated 2026‑07‑20 — see `docs/analysis_log.md` Entry 50 for the merge, Entries 87/89/90 for the bootstrapping gap below)
+
+**This section previously described two separate graphs (a SQLite "domain" graph + a 5‑minute‑cached in‑memory "technical" graph). That's no longer accurate.** As of the 2026‑07‑02 merge, it's **one SQLite‑backed graph** (`kg/graph.go`), every node/edge tagged with a `category` column:
+
+- **`business`** — the *data*: `Equipment`, `Event` (micro‑stops), `Cause`, `Cost`, `Operator`, `Product`, `OF`. Auto‑enriched by `KGSubscriber`.
+- **`platform`** — the *architecture*: Pipeline/Function/Connection/Topic/Dashboard, derived only from pipelines you build (empty until you save one — shipped examples don't count). Rebuilt by `RepopulatePlatform`, no‑op'd by a registry‑hash check (the old 5‑minute cache is gone).
+
+Read through one function, `GetGraph(category)` → `GET /api/kg?category=business|platform|all`. `/api/kg/technical` and `/api/kg/domain` still work as thin legacy aliases.
+
+**Known gap — the `business` category has no structure‑discovery bootstrapping path.** `Equipment` nodes are created in exactly one place (`kg/subscriber.go`, triggered only by `mindset/events/micro-stop`) — nothing connects OPC‑UA discovery (`internal/discovery.BrowseNodeTree`) to the graph, and the ISA‑95 mapper (`internal/uns/mapper.go`) that could seed it only shapes MQTT topic names today. Same gap on the SQL side: `sql_query`'s `canonical` output (§4.4) isn't consumed by anything either, despite `docs/mysql_connector.md` describing it as if it were. **Proposed fix, agreed in principle, not yet built:** auto‑generate the Equipment/Area/Site skeleton at OPC‑UA connect time via the existing ISA‑95 mapper, gate it behind mandatory human validation before it's live, and wire `sql_query`'s canonical output (object set expanded per Entry 92 — `WorkOrder`/`Batch`/`Product`/`Schedule`/`Quality`/`Operator`/`Material`/`Asset`/`ProcessSegment`) into the same bridge. `Asset` specifically is meant to entity-resolve against this same `Equipment` node type once built. Full analysis in `docs/analysis_log.md` Entries 87, 89, 90, 92.
 
 ### 4.7 SQLite schema (`data/mindset.db`)
 | Table | Columns | Written by |
 |---|---|---|
-| `kg_nodes` | id, type, label, properties(JSON), created_at | KG subscriber / graph |
-| `kg_edges` | id, from_id, to_id, relation, weight, created_at | KG subscriber / graph |
+| `kg_nodes` | id, category, type, label, properties(JSON), created_at | KG subscriber / graph |
+| `kg_edges` | id, category, from_id, to_id, relation, weight, created_at | KG subscriber / graph |
 | `tags` | node_id, name, value(JSON), data_type, timestamp_ms, updated_at | server TagRegistry |
 | `events` | id, type, work_center, duration_seconds, cause, cost_eur, payload, timestamp | (reserved) |
+| `connections` | SQL connection definitions created via `/api/connections` | Connections API |
+
+Legacy DBs get `category` backfilled to `'business'` by a migration in `internal/storage/sqlite.go`. Note also (Entry 89): `confidence` is not a general primitive — it only exists on `Cause` nodes/edges (`AddCause`, reusing the generic edge `weight` column); every other edge type hardcodes `weight = 1.0`.
 
 ---
 
@@ -187,7 +194,7 @@ satisfied). Built‑ins:
 | `GET /api/health` | `{status:"ok"}` |
 | `GET /api/config` | safe subset of `agent.yaml` (opcua endpoint/security, broker, hourly rate, site/area) |
 | `GET /api/functions[?type=]` | function catalog (optionally filtered by type) |
-| `GET /api/connectors` | connector functions only |
+| `GET /api/connectors` | connector functions only (thin `type=connector` alias over `/api/functions`) |
 | `GET /api/pipelines` | your pipelines loaded from `config/pipelines/` |
 | `POST /api/pipelines` | save a pipeline as YAML (validated, id sanitized) |
 | `GET /api/pipelines/examples` | shipped template pipelines (`config/pipelines/examples/`) |
@@ -203,8 +210,13 @@ satisfied). Built‑ins:
 | `GET /api/opcua/status` | connection status (status/endpoint/tag_count/error) |
 | `GET /api/opcua/selections` | current per‑tag routing + ISA‑95 mapping (builder governance) |
 | `GET /api/dashboard/pins` | current dashboard pins (from `add_to_dashboard`) |
-| `GET /api/kg/technical` | technical (architecture) graph |
-| `GET /api/kg/domain` | domain (data) graph |
+| `GET/POST /api/connections` | list SQL connections (never returns passwords) / create‑or‑replace one |
+| `POST /api/connections/{id}/test` | force a fresh read‑only health check |
+| `POST /api/connections/{id}/preview` | run a query through the same guards as `sql_query`, capped at 5 rows |
+| `DELETE /api/connections/{id}` | remove a connection |
+| `GET /api/kg?category=business\|platform\|all` | **unified** KG read (default `all`) — see §4.6 |
+| `GET /api/kg/technical` | legacy alias → `category=platform` |
+| `GET /api/kg/domain` | legacy alias → `category=business` |
 | `GET /api/stats` | counts + micro‑stops/downtime/cost + uptime + broker status |
 | `WS  /api/ws` | **WebSocket** live push: `{type:"tag"\|"state"\|"event"\|"dashboard"}` |
 
@@ -216,16 +228,20 @@ WebSocket upgrade, `ws:true`) → `:8080`.
 ## 6. Frontend (React + Vite)
 
 Stack: **React 19**, **Vite**, **React Router**, **Zustand** (cross‑page state),
-**ReactFlow** (canvas), **Cytoscape** (KG), **Recharts** (charts), **xlsx**
+**ReactFlow** (canvas), **ForceGraph** (KG — see note below), **Recharts** (charts), **xlsx**
 (CSV/Excel parsing), **WebSocket** (live push), **Tailwind**.
+
+> **Correction:** the KG viewer now renders via `ForceGraph.jsx`, consuming the unified `/api/kg?category=` endpoint directly. `CytoscapeGraph.jsx` still exists in the repo but is dead code — not imported anywhere.
 
 ### 6.1 Pages (`src/pages/`)
 | Page | Route | What it does |
 |---|---|---|
 | `OverviewPage` | `/overview` | Landing: key stats + quick links |
 | `ConnectPage` | `/connect` | Pick a connector → applies to the pipeline trigger |
+| `OpcuaConnectPage` | `/connect/opcua` | Dedicated OPC‑UA flow: connect → discover → per‑tag raw/ISA‑95/both routing → apply |
 | `BuilderPage` | `/compose` | **Drag‑and‑drop builder** (ReactFlow): ENTRÉE/CŒUR/SORTIE bands, guided config panel, function/field pickers, **smart validation + duplicate prevention**, Save (→YAML), Run, delete node |
 | `PipelinesPage` | `/pipelines` | Two sections: **your** pipelines (run/load) + **templates** (load) |
+| `ConnectionsPage` | `/connections` | SQL connections: list + create + Test — backs the `sql_query` connector |
 | `DashboardPage` | `/dashboards` | **Real‑time ops dashboard**, **WebSocket‑driven** (20s heartbeat fallback): KPIs, pinned widgets, live tag chart, recent events, machine status, Gantt |
 | `KnowledgeGraphPage` | `/kg` | Cytoscape viewer, Technique/Domaine toggle + type filters |
 
@@ -337,15 +353,21 @@ mindset-data-edge/
 │   ├── rules/            # Run/Stop detection + StateStore
 │   ├── functions/        # function registry + connectors/transforms/...
 │   ├── pipeline/         # YAML loader, registry, execution engine
-│   ├── kg/               # Knowledge Graph (domain + technical + subscriber)
-│   └── storage/          # SQLite store + schema
+│   ├── kg/               # Knowledge Graph — one graph, category-tagged (see §4.6)
+│   ├── storage/          # SQLite store + schema
+│   ├── connections/      # SQL connection pool/registry (MySQL only) for sql_query
+│   └── e2e/              # build-tagged integration tests (real MySQL via testcontainers)
 ├── config/
 │   ├── agent.yaml        # site, opcua, mqtt, cost
+│   ├── connections.yaml  # SQL connection definitions (dev_erp, etc.)
 │   └── pipelines/*.yaml  # predefined pipelines
 ├── frontend/pipeline-builder/   # React + Vite web studio
 │   ├── src/{pages,components,lib,store,api}/
 │   ├── vite.config.js    # proxy /api -> :8080
 │   └── package.json
+├── sim/erp/               # fake ERP schema/seed/grants (MySQL)
+├── cmd/erpsim/            # fake ERP data generator (advance/rotate/quality/plan loops)
+├── docker-compose.dev-erp.yml   # fake ERP MySQL container
 ├── data/mindset.db       # SQLite (gitignored)
 ├── docs/                 # this file + design notes
 ├── run.ps1               # one-command launcher (build + start all)
@@ -377,9 +399,17 @@ go build -o bin/server.exe ./cmd/server
 go build -o bin/agent.exe  ./cmd/agent
 ```
 
-**Prerequisites for live data:** an MQTT broker on `:1883` and (for real tags) the
+**Prerequisites for live data:** an MQTT broker on `:1883` (not bundled — e.g. `docker run -d --name mosquitto -p 1883:1883 eclipse-mosquitto:2 mosquitto -c /mosquitto-no-auth.conf`) and (for real tags) the
 Prosys OPC‑UA simulator at the endpoint in `config/agent.yaml`. Without them the UI
 still runs; live values/rates/state are limited and persisted tags are shown.
+
+**For the SQL connector / fake ERP demo:**
+```powershell
+docker compose -f docker-compose.dev-erp.yml up -d   # MySQL on host :3308
+$env:MINDSET_ERP_PASSWORD = "readonly_dev"             # matches mindset_readonly in sim/erp/grant.mysql.sql
+go run ./cmd/erpsim                                     # background data generator
+```
+Then verify via the **Connections** page (**Test** on `dev_erp`) before running `config/pipelines/examples/of_enrichment.yaml`.
 
 ---
 
@@ -417,12 +447,15 @@ still runs; live values/rates/state are limited and persisted tags are shown.
     (`opcua.auto_connect=false`); it keeps running rules + KG and consumes the
     server‑published `site/#`. Builder function pickers are restricted to
     ISA‑95/Both work centers (`/api/opcua/selections`).
+19. **MySQL connector V1a** (2026‑07‑06 to 07‑18) — `sql_query` fully implemented: `internal/connections.Registry`, `field_map`/`value_map` → `canonical` output aligned to ISA‑95's information model, `/api/connections` CRUD + `/test` + `/preview`, `ConnectionsPage`/`SqlConfigPanel`/`FieldMapEditor` frontend, the fake‑ERP dev stack (`cmd/erpsim`, `docker-compose.dev-erp.yml`), and `-tags=integration` tests against a real MySQL testcontainer. See `docs/mysql_connector.md` and `docs/analysis_log.md` Entries 58‑82.
+20. **KG unified into one graph** (2026‑07‑02) — `business`/`platform` categories replace the old two‑graph (SQLite domain + in‑memory technical) design; see §4.6.
 
 ## 11. Notes & limitations
 - **TRS** on the dashboard is an *availability proxy* (downtime vs an 8h shift);
   true OEE needs production‑count + quality data not yet captured.
 - **"vs hier"** deltas need events spanning two days to show a baseline.
-- **Modbus/SQL** connectors are demo stubs (metadata only).
+- **Modbus** is a demo stub (metadata only, errors if run). **SQL (`sql_query`) is fully implemented**, not a stub — see item 19 above.
+- **The Knowledge Graph's `business` category has no structure‑discovery bootstrapping path** — `Equipment` nodes only appear reactively, from a micro‑stop event, not from OPC‑UA discovery or the SQL `canonical` output. See §4.6 and `docs/analysis_log.md` Entries 87/89/90/92 for the full analysis and the proposed (not yet built) fix.
 - Live values/rates/state require the agent to be actively publishing; otherwise
   tags persist (SQLite) but rates read 0 and state is last‑known.
 - The dashboard is **WebSocket‑driven** with a **20s polling fallback**.

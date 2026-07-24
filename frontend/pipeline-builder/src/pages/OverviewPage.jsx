@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { fetchStats } from '../api/client';
 
 export default function OverviewPage() {
+  const { t } = useTranslation();
   const [stats, setStats] = useState(null);
   const [error, setError] = useState(null);
   const navigate = useNavigate();
@@ -13,15 +15,15 @@ export default function OverviewPage() {
 
   const cards = [
 
-    { label: 'Fonctions disponibles', value: stats?.functions },
+    { label: t('overview.functionsAvailable'), value: stats?.functions },
   ];
 
   const steps = [
-    { to: '/connect', title: 'Connect', desc: 'Choisir une source de données' },
-    { to: '/compose', title: 'Compose', desc: 'Construire le pipeline (drag & drop)' },
-    { to: '/pipelines', title: 'Pipelines', desc: 'Charger / exécuter un pipeline' },
-    { to: '/dashboards', title: 'Dashboards', desc: 'Voir les métriques temps réel' },
-    { to: '/kg', title: 'Knowledge Graph', desc: 'Explorer les relations' },
+    { to: '/connectors', title: t('nav.connectors'), desc: t('overview.stepConnectors') },
+    { to: '/compose', title: 'Compose', desc: t('overview.stepCompose') },
+    { to: '/pipelines', title: t('nav.pipelines'), desc: t('overview.stepPipelines') },
+    { to: '/dashboards', title: t('nav.dashboards'), desc: t('overview.stepDashboards') },
+    { to: '/kg', title: t('nav.kg'), desc: t('overview.stepKg') },
   ];
 
   return (
@@ -29,12 +31,12 @@ export default function OverviewPage() {
       <div className="max-w-4xl mx-auto">
         <h1 className="text-2xl font-bold text-white mb-1">MindSet Data</h1>
         <p className="text-dark-400 text-sm mb-6">
-          Construisez des pipelines industriels visuellement, exécutez-les, et explorez le graphe de connaissances.
+          {t('overview.subtitle')}
         </p>
 
         {error && (
           <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-3 text-red-400 text-sm mb-6">
-            ❌ {error} — le serveur API tourne-t-il sur :8080 ?
+            ❌ {error} — {t('overview.serverDownHint')}
           </div>
         )}
 
@@ -48,7 +50,7 @@ export default function OverviewPage() {
           ))}
         </div>
 
-        <h2 className="text-sm font-semibold text-dark-300 uppercase tracking-wider mb-3">Démarrer</h2>
+        <h2 className="text-sm font-semibold text-dark-300 uppercase tracking-wider mb-3">{t('overview.getStarted')}</h2>
         <div className="grid gap-3 sm:grid-cols-2">
           {steps.map((s) => (
             <button

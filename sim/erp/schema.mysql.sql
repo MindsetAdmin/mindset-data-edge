@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS work_orders (
   started_at     DATETIME NULL,
   finished_at    DATETIME NULL,
   operator_id    VARCHAR(32) NULL,
+  due_date       DATE NULL,
+  customer_id    VARCHAR(64) NULL,
   INDEX idx_wc_status (work_center, status)
 );
 

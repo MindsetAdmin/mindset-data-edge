@@ -58,6 +58,17 @@ export async function runPipeline(id) {
     return response.json();
 }
 
+export async function deletePipeline(id) {
+    const response = await fetch(`${API_BASE}/pipelines/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+    });
+    if (!response.ok) {
+        const body = await response.text();
+        throw new Error(body || `Failed to delete pipeline: ${response.statusText}`);
+    }
+    return response.json();
+}
+
 export async function fetchTags() {
     const response = await fetch(`${API_BASE}/tags`);
     if (!response.ok) {
@@ -87,6 +98,16 @@ export async function fetchConfig() {
 export async function fetchDashboardPins() {
     const response = await fetch(`${API_BASE}/dashboard/pins`);
     if (!response.ok) throw new Error(`Failed to fetch dashboard pins: ${response.statusText}`);
+    return response.json();
+}
+
+// Live active production per machine, from a validated ERP work-order
+// mapping (Entry 120) — each fact carries equipment_id when the IT-side
+// work_center resolved against a real OT Equipment node, "" otherwise.
+export async function fetchActiveProduction(workCenter = '') {
+    const qs = workCenter ? `?work_center=${encodeURIComponent(workCenter)}` : '';
+    const response = await fetch(`${API_BASE}/production/active${qs}`);
+    if (!response.ok) throw new Error(`Failed to fetch active production: ${response.statusText}`);
     return response.json();
 }
 
@@ -126,7 +147,10 @@ export async function opcuaDiscover() {
 }
 
 // opcuaSubscribe starts monitoring the selected tags.
-// selections: [{ node_id, mode: 'raw'|'isa95'|'both' }]
+// selections: [{ node_id, mode: 'raw'|'isa95'|'both', area?, work_center?, work_unit?, tag_name? }]
+// The 4 optional fields (Entry 124) correct the auto-computed ISA-95 mapping
+// shown after discover — leave any of them blank to keep the mapper's guess
+// for just that field.
 export async function opcuaSubscribe(selections) {
     const response = await fetch(`${API_BASE}/opcua/subscribe`, {
         method: 'POST',
@@ -177,4 +201,92 @@ export async function fetchKG(category = 'all') {
 export async function fetchKnowledgeGraph(kind = 'technical') {
     const category = kind === 'technical' ? 'platform' : kind === 'domain' ? 'business' : kind;
     return fetchKG(category);
+}
+
+// --- KG structural bootstrap validation (v0 — docs/analysis_log.md Entries 95/96) --
+
+// fetchPendingKGNodes returns business-category nodes auto-generated from OPC-UA
+// discovery that haven't been human-validated yet.
+export async function fetchPendingKGNodes() {
+    const response = await fetch(`${API_BASE}/kg/pending`);
+    if (!response.ok) throw new Error(`Failed to fetch pending KG nodes: ${response.statusText}`);
+    return response.json(); // { nodes: [...], total }
+}
+
+export async function validateKGNode(id) {
+    const response = await fetch(`${API_BASE}/kg/pending/${encodeURIComponent(id)}/validate`, { method: 'POST' });
+    if (!response.ok) throw new Error(`Failed to validate node: ${response.statusText}`);
+    return response.json();
+}
+
+export async function rejectKGNode(id) {
+    const response = await fetch(`${API_BASE}/kg/pending/${encodeURIComponent(id)}/reject`, { method: 'POST' });
+    if (!response.ok) throw new Error(`Failed to reject node: ${response.statusText}`);
+    return response.json();
+}
+
+// --- SQL Connections (internal/connections) ---------------------------------
+
+export async function fetchConnections() {
+    const response = await fetch(`${API_BASE}/connections`);
+    if (!response.ok) throw new Error(`Failed to fetch connections: ${response.statusText}`);
+    return response.json(); // { connections: [...], total }
+}
+
+// cfg: { id, name, driver, host, port, database, username, password_env, tls,
+//        read_timeout_seconds, write_timeout_seconds, max_open_conns,
+//        max_idle_conns, conn_max_lifetime_seconds }
+export async function createConnection(cfg) {
+    const response = await fetch(`${API_BASE}/connections`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cfg),
+    });
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `Failed to save connection: ${response.statusText}`);
+    }
+    return response.json();
+}
+
+// testConnection always resolves — a failed health check comes back as
+// {ok:false, error} rather than an HTTP error.
+export async function testConnection(id) {
+    const response = await fetch(`${API_BASE}/connections/${encodeURIComponent(id)}/test`, { method: 'POST' });
+    if (!response.ok) throw new Error(`Failed to test connection: ${response.statusText}`);
+    return response.json(); // { ok, latency_ms, read_only?, error? }
+}
+
+// fetchConnectionDatabases browses every database + table visible to this
+// connection's user in one call (scoped by the account's real MySQL grants —
+// not necessarily every database on the server).
+export async function fetchConnectionDatabases(id) {
+    const response = await fetch(`${API_BASE}/connections/${encodeURIComponent(id)}/databases`);
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || `Failed to list databases: ${response.statusText}`);
+    return body; // { databases: [{ name, tables: [{ name, columns: [...] }] }], total }
+}
+
+// preview: { query, params, limit } — runs through the same guards as
+// sql_query, capped server-side at 5 rows.
+export async function previewConnection(id, preview) {
+    const response = await fetch(`${API_BASE}/connections/${encodeURIComponent(id)}/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(preview),
+    });
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `Failed to preview: ${response.statusText}`);
+    }
+    return response.json(); // { rows, canonical, canonical_type, row_count, query_ms }
+}
+
+export async function deleteConnection(id) {
+    const response = await fetch(`${API_BASE}/connections/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `Failed to delete connection: ${response.statusText}`);
+    }
+    return response.json();
 }

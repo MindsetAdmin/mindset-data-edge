@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { opcuaConnect, opcuaDisconnect, opcuaStatus, fetchConfig } from '../api/client';
 
 const SECURITY_MODES = ['None', 'Sign', 'SignAndEncrypt'];
@@ -23,6 +24,7 @@ function StatusBadge({ status }) {
 // OPC-UA connection form. Connecting doubles as "Test Connection": a successful
 // connect returns connected status; a failure surfaces the server error inline.
 export default function OpcuaConnectionPanel({ onConnected }) {
+  const { t } = useTranslation();
   const [form, setForm] = useState({
     endpoint: '',
     security_mode: 'None',
@@ -71,7 +73,7 @@ export default function OpcuaConnectionPanel({ onConnected }) {
       const st = await opcuaConnect({ ...form, session_timeout: Number(form.session_timeout) || 60 });
       setStatus(st);
       if (st.connected) onConnected?.(st);
-      else setError(st.error || 'Connexion échouée.');
+      else setError(st.error || t('opcuaPanel.connectFailed'));
     } catch (err) {
       setError(err.message);
       setStatus({ status: 'error', connected: false });
@@ -121,24 +123,24 @@ export default function OpcuaConnectionPanel({ onConnected }) {
     <div className="border border-blue-500/30 bg-blue-500/5 rounded-lg p-4">
       <div className="flex items-center gap-2 mb-3">
         <span className="text-xl">🔌</span>
-        <h3 className="font-medium text-white">Connexion OPC-UA</h3>
+        <h3 className="font-medium text-white">{t('opcuaPanel.title')}</h3>
         <span className="ml-auto"><StatusBadge status={status.status} /></span>
       </div>
 
-      {field('Endpoint (URL)', 'endpoint')}
+      {field(t('opcuaPanel.fieldEndpoint'), 'endpoint')}
       <div className="grid grid-cols-2 gap-2">
-        {field('Mode de sécurité', 'security_mode', 'text', SECURITY_MODES)}
-        {field('Politique de sécurité', 'security_policy', 'text', SECURITY_POLICIES)}
+        {field(t('opcuaPanel.fieldSecurityMode'), 'security_mode', 'text', SECURITY_MODES)}
+        {field(t('opcuaPanel.fieldSecurityPolicy'), 'security_policy', 'text', SECURITY_POLICIES)}
       </div>
       <div className="grid grid-cols-2 gap-2">
-        {field('Utilisateur (optionnel)', 'username')}
-        {field('Mot de passe (optionnel)', 'password', 'password')}
+        {field(t('opcuaPanel.fieldUsername'), 'username')}
+        {field(t('opcuaPanel.fieldPassword'), 'password', 'password')}
       </div>
-      {field('Timeout de session (s)', 'session_timeout', 'number')}
+      {field(t('opcuaPanel.fieldSessionTimeout'), 'session_timeout', 'number')}
 
       {form.security_mode !== 'None' && (
         <p className="text-[11px] text-yellow-400/80 mb-2">
-          ⚠️ Les modes Sign / SignAndEncrypt nécessitent un certificat client (non encore configuré). Utilisez « None » pour l'instant.
+          ⚠️ {t('opcuaPanel.securityWarning')}
         </p>
       )}
 
@@ -154,7 +156,7 @@ export default function OpcuaConnectionPanel({ onConnected }) {
           disabled={busy || !form.endpoint.trim()}
           className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm px-3 py-1.5 rounded-md transition"
         >
-          {busy ? '…' : status.connected ? 'Reconnecter' : 'Connecter'}
+          {busy ? '…' : status.connected ? t('opcuaPanel.reconnect') : t('sqlConnections.connect')}
         </button>
         {status.connected && (
           <button
@@ -162,7 +164,7 @@ export default function OpcuaConnectionPanel({ onConnected }) {
             disabled={busy}
             className="bg-dark-700 hover:bg-dark-600 text-white text-sm px-3 py-1.5 rounded-md transition"
           >
-            Déconnecter
+            {t('opcuaPanel.disconnect')}
           </button>
         )}
       </div>

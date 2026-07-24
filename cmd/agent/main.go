@@ -11,10 +11,12 @@ import (
 	"time"
 
 	"github.com/MindsetAdmin/mindset-data-edge/internal/config"
+	"github.com/MindsetAdmin/mindset-data-edge/internal/connections"
 	"github.com/MindsetAdmin/mindset-data-edge/internal/discovery"
 	"github.com/MindsetAdmin/mindset-data-edge/internal/functions"
 	"github.com/MindsetAdmin/mindset-data-edge/internal/functions/calculates"
 	"github.com/MindsetAdmin/mindset-data-edge/internal/functions/conditions"
+	"github.com/MindsetAdmin/mindset-data-edge/internal/functions/connectors"
 	"github.com/MindsetAdmin/mindset-data-edge/internal/functions/outputs"
 	"github.com/MindsetAdmin/mindset-data-edge/internal/functions/transforms"
 	"github.com/MindsetAdmin/mindset-data-edge/internal/kg"
@@ -117,7 +119,7 @@ func main() {
 		defer kgInstance.Close()
 		log.Printf("[KG] ✅ Knowledge Graph ready")
 
-		kgSub, err := kg.NewKGSubscriber("tcp://localhost:1883", kgInstance)
+		kgSub, err := kg.NewKGSubscriber("tcp://localhost:1883", "mindset-agent-kg", kgInstance)
 		if err != nil {
 			log.Printf("[KG] ⚠️ Warning: failed to create subscriber: %v", err)
 		} else {
@@ -126,6 +128,28 @@ func main() {
 			} else {
 				defer kgSub.Stop()
 				log.Printf("[KG] ✅ Subscriber started")
+			}
+		}
+	}
+
+	// ── STEP 0.75: SQL Connections Registry ─────────────────────────────
+	fmt.Println("\n[CONNECTIONS] Loading SQL connection definitions...")
+
+	connCfg, err := connections.LoadConfig("config/connections.yaml")
+	if err != nil {
+		log.Printf("[CONNECTIONS] No config/connections.yaml (%v); starting with an empty connection set", err)
+		connCfg = &connections.Config{}
+	}
+	connReg := connections.NewRegistry(connCfg)
+	defer connReg.CloseAll()
+	if kgInstance != nil {
+		if records, err := kgInstance.Store().ListConnections(); err != nil {
+			log.Printf("[CONNECTIONS] Could not load persisted connections: %v", err)
+		} else {
+			for _, rec := range records {
+				if err := connReg.Add(rec.ConnectionConfig); err != nil {
+					log.Printf("[CONNECTIONS] Skipping invalid persisted connection %q: %v", rec.ID, err)
+				}
 			}
 		}
 	}
@@ -141,13 +165,11 @@ func main() {
 		// À implémenter si tu as un client MQTT séparé
 		log.Printf("[FUNCTIONS] MQTT functions available")
 	}
+	funcRegistry.Register(connectors.NewSQLQueryHandler(connReg).GetFunction())
 
 	// Transforms
 	stateMachineHandler := transforms.NewStateMachineHandler()
 	funcRegistry.Register(stateMachineHandler.GetFunction())
-
-	unsMapperHandler := transforms.NewUNSMapperHandler(cfg.Site.ID)
-	funcRegistry.Register(unsMapperHandler.GetFunction())
 
 	filterHandler := transforms.NewFilterHandler()
 	funcRegistry.Register(filterHandler.GetFunction())

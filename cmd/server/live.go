@@ -141,6 +141,19 @@ func (t *StateTracker) get(workCenter string) *MachineState {
 	return t.states[workCenter]
 }
 
+// snapshot returns a shallow copy of every tracked machine state, keyed by
+// work center — used by the MCP kg_current_state tool to list all known
+// machines when no specific work_center is requested.
+func (t *StateTracker) snapshot() map[string]MachineState {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make(map[string]MachineState, len(t.states))
+	for wc, st := range t.states {
+		out[wc] = *st
+	}
+	return out
+}
+
 // --- Live hub: one subscription feeding tags, topics and state -------------
 
 type LiveHub struct {

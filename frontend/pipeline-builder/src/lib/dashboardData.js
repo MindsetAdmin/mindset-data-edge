@@ -1,6 +1,8 @@
 // Transforms the domain Knowledge Graph (/api/kg/domain) into dashboard data:
 // events joined with their cause + cost, today/yesterday buckets, and a Pareto.
 
+import i18n from '../i18n';
+
 export function buildEvents(domain) {
   const nodes = domain?.nodes || [];
   const edges = domain?.edges || [];
@@ -128,7 +130,7 @@ export function groupByMachine(events, machines, hourly, shiftSeconds = 8 * 3600
 export function paretoCauses(events) {
   const counts = {};
   events.forEach((e) => {
-    const c = e.cause || 'Non catégorisé';
+    const c = e.cause || i18n.t('dashboard.uncategorized');
     counts[c] = (counts[c] || 0) + 1;
   });
   const total = events.length || 1;
