@@ -1,5 +1,7 @@
 # MindSet Data — Architecture & How It Works
 
+> **Patched 2026-07-28** (was last substantively accurate 2026-07-20): added the MCP server section (§4.8, was missing entirely), corrected the KG structure-discovery section from "proposed, not yet built" to what actually shipped, fixed a stale `docker-compose.dev-erp.yml` reference (renamed to `docker-compose.dev.yml`), and corrected the KG viewer library (ForceGraph, not Cytoscape — this doc had it right already; `CLAUDE.md` had it wrong and was fixed to match). This doc is otherwise the most accurate architecture reference in the repo — unlike `docs/mindset.md`, which is a largely-unbuilt future-vision document (see its own reality-check header). `docs/analysis_log.md` Entry 140 has the full diff rationale.
+
 > Industrial IoT edge platform: it reads machine data from an **OPC‑UA** server,
 > streams it over **MQTT**, contextualizes it into an **ISA‑95 Unified Namespace**,
 > detects **micro‑stops**, computes **costs**, builds a **Knowledge Graph**, and
@@ -172,7 +174,17 @@ auto‑publishes to MQTT (`cmd/server/pipeline_output.go`) — topic from the op
 
 Read through one function, `GetGraph(category)` → `GET /api/kg?category=business|platform|all`. `/api/kg/technical` and `/api/kg/domain` still work as thin legacy aliases.
 
-**Known gap — the `business` category has no structure‑discovery bootstrapping path.** `Equipment` nodes are created in exactly one place (`kg/subscriber.go`, triggered only by `mindset/events/micro-stop`) — nothing connects OPC‑UA discovery (`internal/discovery.BrowseNodeTree`) to the graph, and the ISA‑95 mapper (`internal/uns/mapper.go`) that could seed it only shapes MQTT topic names today. Same gap on the SQL side: `sql_query`'s `canonical` output (§4.4) isn't consumed by anything either, despite `docs/mysql_connector.md` describing it as if it were. **Proposed fix, agreed in principle, not yet built:** auto‑generate the Equipment/Area/Site skeleton at OPC‑UA connect time via the existing ISA‑95 mapper, gate it behind mandatory human validation before it's live, and wire `sql_query`'s canonical output (object set expanded per Entry 92 — `WorkOrder`/`Batch`/`Product`/`Schedule`/`Quality`/`Operator`/`Material`/`Asset`/`ProcessSegment`) into the same bridge. `Asset` specifically is meant to entity-resolve against this same `Equipment` node type once built. Full analysis in `docs/analysis_log.md` Entries 87, 89, 90, 92.
+**Updated 2026‑07‑28 — the structure‑discovery bootstrap described below as "proposed, not yet built" has since been built.** This section is kept for historical context on *why* it was needed; see `CLAUDE.md`'s "Structural bootstrap" and "IT-side structural bootstrap" sections for the current, accurate description. Summary of what shipped since this section was last accurate:
+- **OT side**: `GET /api/opcua/discover` now seeds the Equipment/Area/Site/WorkCenter skeleton automatically via `kg.SeedFromDiscovery`, gated by a confidence score (heuristic, not ML) — nodes scoring ≥0.7 auto‑accept, the rest go into a pending‑review queue surfaced on `KnowledgeGraphPage` (Accept/Reject UI, dashed‑ring styling for pending nodes).
+- **IT side (Track B)**: `GET /api/connections/{id}/discover` does the SQL‑schema equivalent — `internal/connections/canonical_suggest.go` scores tables against `work_order`/`product` canonical types by column‑name synonym matching, writes confidence‑gated `SchemaMapping` nodes through the same pending‑validation pipeline.
+- **Entity resolution**: `cmd/server/entity_resolution.go`'s `ResolveWorkCenters` matches OT `Equipment` nodes to IT `work_center` values and persists `same_as` edges — runs automatically after every `/discover`.
+- **Consumption**: `cmd/server/active_production.go`'s `ActiveProduction` (also exposed as the MCP tool `kg_active_production` — see §4.8) queries a validated `work_order` mapping for live production context, merged server‑side with `kg_cost_summary`'s cost ranking so cost and delivery‑deadline urgency surface as one prioritized answer.
+
+Known real gap that's still open: `sql_query`'s `field_map`/`value_map`‑driven `canonical` output (§4.4) is still not consumed by the bootstrap above — Track B's schema discovery is a separate, parallel path. Full history in `docs/analysis_log.md` Entries 87, 89, 90, 92, 107–127.
+
+### 4.8 MCP server (missing from earlier versions of this doc — added 2026‑07‑28)
+
+`cmd/server/mcp_server.go` mounts a **read‑only** MCP server exposing the KG + live state as 5 tools: `kg_query_events`, `kg_cost_summary` (merged with delivery‑deadline urgency when grouped by work_center), `kg_current_state`, `kg_describe_node`, `kg_active_production`. Two transports: HTTP at `/mcp` on the existing `:8080` (remote/URL clients) and stdio via `-mcp-stdio` (no port bound — for subprocess‑launching clients like Claude Desktop, which needs absolute paths for all 4 `-config`/`-db`/`-pipelines`/`-connections` flags since it doesn't launch from the repo directory). Full detail in `CLAUDE.md`'s "MCP server" section.
 
 ### 4.7 SQLite schema (`data/mindset.db`)
 | Table | Columns | Written by |
@@ -217,8 +229,14 @@ Legacy DBs get `category` backfilled to `'business'` by a migration in `internal
 | `GET /api/kg?category=business\|platform\|all` | **unified** KG read (default `all`) — see §4.6 |
 | `GET /api/kg/technical` | legacy alias → `category=platform` |
 | `GET /api/kg/domain` | legacy alias → `category=business` |
+| `GET /api/kg/pending` | business-category nodes awaiting human validation (structural bootstrap) — see §4.7 update |
+| `POST /api/kg/pending/{id}/validate` \| `.../reject` | confirm / discard an auto-generated node |
+| `GET /api/connections/{id}/discover` | IT-side schema discovery + confidence-gated `SchemaMapping` seeding + entity resolution — see §4.7 update |
+| `GET /api/connections/{id}/databases` | browse every database/table/column visible to a connection's user (Entry 126) |
+| `GET /api/production/active[?work_center=]` | live active production order + product per machine, from a validated `work_order` mapping |
 | `GET /api/stats` | counts + micro‑stops/downtime/cost + uptime + broker status |
 | `WS  /api/ws` | **WebSocket** live push: `{type:"tag"\|"state"\|"event"\|"dashboard"}` |
+| `POST /mcp` | MCP server (Streamable HTTP) — see §4.8 |
 
 CORS is enabled; in dev the Vite proxy forwards `/api` (HTTP **and** the
 WebSocket upgrade, `ws:true`) → `:8080`.
@@ -229,7 +247,8 @@ WebSocket upgrade, `ws:true`) → `:8080`.
 
 Stack: **React 19**, **Vite**, **React Router**, **Zustand** (cross‑page state),
 **ReactFlow** (canvas), **ForceGraph** (KG — see note below), **Recharts** (charts), **xlsx**
-(CSV/Excel parsing), **WebSocket** (live push), **Tailwind**.
+(CSV/Excel parsing), **WebSocket** (live push), **Tailwind**, **react-i18next**
+(FR default / EN toggle in `NavBar`; `src/locales/{fr,en}.json`).
 
 > **Correction:** the KG viewer now renders via `ForceGraph.jsx`, consuming the unified `/api/kg?category=` endpoint directly. `CytoscapeGraph.jsx` still exists in the repo but is dead code — not imported anywhere.
 
@@ -243,7 +262,7 @@ Stack: **React 19**, **Vite**, **React Router**, **Zustand** (cross‑page state
 | `PipelinesPage` | `/pipelines` | Two sections: **your** pipelines (run/load) + **templates** (load) |
 | `ConnectionsPage` | `/connections` | SQL connections: list + create + Test — backs the `sql_query` connector |
 | `DashboardPage` | `/dashboards` | **Real‑time ops dashboard**, **WebSocket‑driven** (20s heartbeat fallback): KPIs, pinned widgets, live tag chart, recent events, machine status, Gantt |
-| `KnowledgeGraphPage` | `/kg` | Cytoscape viewer, Technique/Domaine toggle + type filters |
+| `KnowledgeGraphPage` | `/kg` | **`ForceGraph.jsx`** viewer (not Cytoscape — `CytoscapeGraph.jsx` still exists but is dead code, unused since this doc's earlier version), Technique/Domaine toggle + type filters, **Pending validation list** (Accept/Reject for structural-bootstrap nodes, dashed amber ring until confirmed) |
 
 ### 6.2 Components (`src/components/`)
 `NavBar` (shows the **MindSet Data logo**, `public/logo.png`), `Palette`,
@@ -367,7 +386,7 @@ mindset-data-edge/
 │   └── package.json
 ├── sim/erp/               # fake ERP schema/seed/grants (MySQL)
 ├── cmd/erpsim/            # fake ERP data generator (advance/rotate/quality/plan loops)
-├── docker-compose.dev-erp.yml   # fake ERP MySQL container
+├── docker-compose.dev.yml   # mosquitto + fake-ERP MySQL + erpsim (renamed from docker-compose.dev-erp.yml)
 ├── data/mindset.db       # SQLite (gitignored)
 ├── docs/                 # this file + design notes
 ├── run.ps1               # one-command launcher (build + start all)
@@ -405,10 +424,10 @@ still runs; live values/rates/state are limited and persisted tags are shown.
 
 **For the SQL connector / fake ERP demo:**
 ```powershell
-docker compose -f docker-compose.dev-erp.yml up -d   # MySQL on host :3308
+docker compose -f docker-compose.dev.yml up -d        # mosquitto + MySQL (:3308) + erpsim, all in one network
 $env:MINDSET_ERP_PASSWORD = "readonly_dev"             # matches mindset_readonly in sim/erp/grant.mysql.sql
-go run ./cmd/erpsim                                     # background data generator
 ```
+(Run `docker compose -f docker-compose.dev.yml up -d mosquitto mysql-erp` instead, then `go run ./cmd/erpsim` locally, if iterating on the generator itself.)
 Then verify via the **Connections** page (**Test** on `dev_erp`) before running `config/pipelines/examples/of_enrichment.yaml`.
 
 ---

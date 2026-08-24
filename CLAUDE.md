@@ -317,7 +317,7 @@ React 19 + Vite + Tailwind. State managed with Zustand (`src/store/studioStore.j
 | `BuilderPage` | `/compose` | Drag-and-drop pipeline builder (ReactFlow); ENTRÉE/CŒUR/SORTIE bands, guided config panel, Save→YAML, Run, delete |
 | `PipelinesPage` | `/pipelines` | Your pipelines (run/load) + templates (load) |
 | `DashboardPage` | `/dashboards` | Real-time ops dashboard, WebSocket-driven (20s fallback); KPIs, pinned widgets, live chart, machine status, Gantt |
-| `KnowledgeGraphPage` | `/kg` | Cytoscape viewer, Technique/Domaine toggle + type filters; **Pending validation** list (Accept/Reject) for structural-bootstrap nodes, rendered with a dashed amber ring until confirmed |
+| `KnowledgeGraphPage` | `/kg` | `ForceGraph.jsx` viewer (not Cytoscape — `CytoscapeGraph.jsx` exists in the repo but is dead code, unused; corrected 2026-07-28, see `analysis_log.md` Entry 140), Technique/Domaine toggle + type filters; **Pending validation** list (Accept/Reject) for structural-bootstrap nodes, rendered with a dashed amber ring until confirmed |
 
 ### `src/lib/` helpers
 
@@ -329,7 +329,7 @@ React 19 + Vite + Tailwind. State managed with Zustand (`src/store/studioStore.j
 | `functionDocs.js` | Per-function description + field labels/help/examples |
 | `functionDefaults.js` | Default config seeded when a function node is added |
 | `connectorTemplates.js` | Default config per connector + trigger type |
-| `kgGraph.js` | Map KG JSON → Cytoscape elements + styles |
+| `kgGraph.js` | **Dead code** — was the Cytoscape mapping helper; unused since the KG viewer moved to `ForceGraph.jsx` (which handles its own KG JSON → graph-elements transform internally via `typesPresent`/`NODE_COLORS`/`FALLBACK_COLOR`). Not imported anywhere. Corrected 2026-07-28, `analysis_log.md` Entry 140. |
 | `dashboardData.js` | Join domain graph → events (cause/cost), today/yesterday |
 | `useLiveSocket.js` | WebSocket hook (auto-reconnect) for live push |
 

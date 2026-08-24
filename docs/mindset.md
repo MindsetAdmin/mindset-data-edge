@@ -2,10 +2,22 @@
 
 > **Vision:** Connect every machine, system, and data flow in a factory to a single reliable and exploitable source of truth — the Unified Namespace (UNS) — to transform every signal into a business decision.
 
-> **Document status:** Vision narrative — updated 2026-06-28.
-> **Canonical decision log:** `docs/decisions.md` (25 locked decisions as of 2026-06-28). If this doc conflicts with `decisions.md`, **decisions.md wins**.
-> **Competitive analysis:** `docs/MindSet_Competitive_Analysis_v2_2.xlsx` (9 sheets).
-> **Audit trail:** `docs/analysis_log.md` (running session log, Entries 1-16).
+> **Document status:** Vision narrative — updated 2026-06-28. **Reality-check note added 2026-07-28 — read it before trusting anything below as current state.**
+> **Canonical decision log:** `docs/decisions.md` — restored 2026-07-28 from git history (was deleted in commit `c310c6f`, recovered from `c25337d`). Back and readable; still untracked in git until committed.
+> **Competitive analysis:** `docs/MindSet_Competitive_Analysis_v2_3.xlsx` (the `v2_2` file this used to point to is also deleted).
+> **Audit trail:** `docs/analysis_log.md` — now well past Entries 1-16, currently up to **Entry 138**. Search it for the real, current status of anything below rather than trusting a specific section number here.
+
+---
+
+## ⚠️ Reality check (2026-07-28) — read this before the rest of the document
+
+**This document is a vision/roadmap narrative, not a description of the current build.** A large fraction of what follows — separate `mindset-data-platform` and `mindset-data-website` repos, Redpanda Connect pipelines, a local Phi-3/Ollama SLM, a PostgreSQL+TimescaleDB+Redis cloud stack, the 3-edition Cloud/Hybrid/On-Premise distribution model, license-key-gated Docker Hub distribution — **does not exist in the actual codebase today**.
+
+**License, resolved**: §13 (proprietary/closed-source) is correct; the footer (Apache 2.0) was stale. `docs/decisions.md` is restored (see above) — its locked decision: **"Licensing model: PROPRIETARY (closed-source) for first 2 years — supersedes prior Apache 2.0 decision."** Apache 2.0 was the *original* choice, later explicitly overridden. Even `decisions.md`'s own footer had this same stale-Apache-2.0 bug before the restore — a pre-existing doc bug, now fixed there too. No real `LICENSE` file exists in the repo yet either way — that's still a genuine gap.
+
+**For an accurate, actively-maintained picture of what's actually built, use `CLAUDE.md`** (repo root) — it's auto-loaded into every Claude Code session and documents the real architecture: a single repo, two Go binaries (`cmd/server`, `cmd/agent`), a custom pipeline engine (not Redpanda), a SQLite-backed Knowledge Graph with confidence-gated OT+IT structural auto-bootstrap, an MCP server (HTTP + stdio, 5 tools), and a React frontend — all running on one machine today, not the distributed multi-edition system described in §4/§11/§12 below. `docs/context_starter.md` (rewritten 2026-07-28) has a compact built-vs-not-built summary if you want it without opening `CLAUDE.md`.
+
+**What's genuinely still true and load-bearing from this doc**: the problem framing (§1), the ISA-95/UNS positioning (§2, §7), the persona segmentation (§3) — modulo the unsourced McKinsey quote and two persona "Verbatim" quotes flagged in `analysis_log.md` Entry 137, which need a real source or a rewrite before external use. Treat everything else — especially §4 (Architecture), §11 (repo structure), §12 (infrastructure/distribution), §13 (tech stack) — as a **future-state proposal**, not a status report.
 
 ---
 
@@ -1431,5 +1443,5 @@ Client has existing PC/server?
 ---
 
 *Internal document — Mindset Data — Confidential*
-*Last updated: May 2026*
-*License: Apache 2.0*
+*Last updated: May 2026 (body) / 2026-07-28 (reality-check header only — see top of doc)*
+*License: Proprietary (closed-source), 2-year minimum — this footer previously said Apache 2.0, which was the superseded original decision, not the current one. See the reality-check block at the top of this document.*

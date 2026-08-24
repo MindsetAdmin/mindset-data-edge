@@ -1,133 +1,94 @@
 # Mindset Data — Context Brief
 
+> **For a Claude Code session in this repo**: don't paste this file — `CLAUDE.md` is auto-loaded automatically and is the accurate, current technical source of truth (data flow, packages, API surface, known limitations). This file is for **claude.ai / web-chat strategy sessions** where `CLAUDE.md` isn't available, or as a fast human-readable orientation doc.
+>
+> **Rewritten 2026-07-28** — the previous version of this file described a stack that never matched what got built (Redpanda Connect, Phi-3/Ollama, Apache 2.0 license, a "not built yet" table where nearly everything listed was actually already built). See `docs/analysis_log.md` Entries 137-138 for how that drift was found. This version reflects what's actually in the repo today; the full always-current version of most of this lives in `CLAUDE.md`.
+
 ## What we're building
-Industrial data infrastructure for manufacturing ETI.
-Edge Agent (Go + Docker) → UNS (ISA-95) → Decision dashboard.
-Maximum local processing. Zero raw data to cloud.
-Zero hardware, zero dev client, deployment in 48h.
+
+Industrial data infrastructure for manufacturing ETI/mid-market factories.
+Two Go binaries (`cmd/server`, `cmd/agent`) + a React pipeline-builder frontend → ISA-95-aligned Knowledge Graph → real-time dashboard + MCP access for AI agents.
+Currently a **single repo, single-machine deployment** (server + agent + frontend on one box, talking over local MQTT) — not yet the multi-edition Cloud/Hybrid/On-Premise distribution model described in `docs/mindset.md`'s vision sections; that's roadmap, not current state.
 
 ## Team
+
 - Mohamed (CTO) — Polytechnique, IoT & embedded systems (Windows PC)
 - Cécilia (CEO) — EDHEC, ex-VC AgriFoodTech
 
-## Stack
-- Edge Agent: Go + Docker (Go 1.22+, static binary, cross-platform)
-- V0 protocols: OPC-UA (`gopcua`) + Modbus TCP (`goburrow/modbus`)
-- V1 protocols: Siemens S7 (`gos7`), SQL, REST, Files/FTP
-- Local SLM: Phi-3 / Ollama (tag classification, fully local)
-- Local DB: SQLite (7-15 day ring buffer, TTL auto-purge)
-- Pipeline: Redpanda Connect (declarative YAML, no-code)
-- Cloud: Scaleway FR (minimal — KG aggregation + remote dashboard)
-- Frontend: React (local first, localhost:3000) + Next.js (website)
-- License: Apache 2.0
+## Stack (actually in `go.mod` / `package.json` — verify there if in doubt)
+
+- Backend: Go, two binaries (`cmd/server` — API + WebSocket + MCP; `cmd/agent` — rules engine + KG subscriber)
+- OPC-UA: `github.com/gopcua/opcua`
+- MQTT: `github.com/eclipse/paho.mqtt.golang` (broker required, e.g. Mosquitto — not bundled by default)
+- SQL connector (V1a, MySQL only): `github.com/go-sql-driver/mysql`
+- WebSocket: `github.com/gorilla/websocket`
+- MCP server: `github.com/modelcontextprotocol/go-sdk` — HTTP (`/mcp`) and stdio (`-mcp-stdio`) transports, 5 read-only tools
+- Local DB: SQLite, pure-Go driver `modernc.org/sqlite` (no CGO) — one file, `data/mindset.db`, shared by both binaries with `PRAGMA busy_timeout`
+- Pipeline engine: **custom Go implementation** (`internal/pipeline`) — YAML-defined nodes, topological execution. **Not Redpanda Connect** — that was vision-doc content that was never built.
+- Local SLM (Phi-3/Ollama) / behavioral inference: **not built.** No local LLM runtime exists in the repo yet.
+- Frontend: React 19 + Vite + Tailwind + Zustand, ReactFlow (pipeline canvas), Cytoscape (KG viewer), i18n via `react-i18next` (FR default, EN toggle)
+- Dev-only fake ERP: `cmd/erpsim` + `sim/erp/*.sql` — simulates a customer MySQL ERP for testing the SQL connector; explicitly a dev fixture, not a real integration
+- Dev-only OPC-UA source: Prosys OPC-UA Simulation Server (free, local) — not a real factory
+- **License**: **Proprietary (closed-source), 2-year minimum** — per `docs/decisions.md` (restored 2026-07-28 from git history): "supersedes prior Apache 2.0 decision." No real `LICENSE` file exists in the repo yet — that's a genuine open gap, independent of which model was chosen.
 
 ## Dev environment
-- OS: Windows PC + PowerShell
-- Docker Desktop + Prosys OPC-UA Simulator (local dev without factory)
-- Go 1.22+, VS Code, Claude Code in repo terminal
+
+- OS: Windows PC + PowerShell (primary shell; Bash also available)
+- `run.ps1` — builds both binaries, starts server + agent + frontend, opens browser (`-NoAgent` / `-NoBuild` flags available)
+- Docker Desktop + Prosys OPC-UA Simulator (local dev without a factory)
+- Go 1.26+, Node/npm for the frontend, Claude Code in repo terminal
+- `docker-compose.dev.yml` — mosquitto + fake-ERP MySQL (+ optional erpsim container) for local dev
 
 ---
 
-## Current stage — [UPDATE EACH SESSION]
+## Current stage — 2026-07-28
 
-Working on: _______________
-Last decision: _______________
-Current blocker: _______________
-
----
-
-## What is BUILT and working (June 2026)
-
-### `internal/discovery/opcua.go` ✅
-- OPC-UA connection to any server (tested on Prosys simulator)
-- Recursive node tree browse with Continuation Point handling
-- Tag discovery: reads NodeID, Name, DataType (`AttributeIDDataType`),
-  Value (`AttributeIDValue`) — single ReadRequest per tag
-- Noise filter: skips Server, Types, Views, Aliases, StaticData, MyObjects
-- `mapDataType()` + `opcuaTypeNodeIDToString()` → clean type names
-  (Boolean / Float / Double / Int32 / Int64 / String / DateTime…)
-- Live subscription via MonitoredItems, 500ms interval, value change callback
-- `WatchForChanges()`: polls node tree every 20s, diffs added/removed tags,
-  calls `onChange` only when something actually changed (zero overhead otherwise)
-- `browseNodeSilent()`: silent browse for periodic watcher (no logs)
-- `tagsToMap()`: O(n) diff keyed by NodeID (stable, survives SCADA renames)
-
-### Key technical decisions locked in
-- `ReferenceTypeID`: 0:33 (HierarchicalReferences) — not 0:31
-- `RequestedMaxReferencesPerNode`: 100 — safe for all OPC-UA servers
-- Continuation Points: always released via `BrowseNext(ReleaseContinuationPoints: true)`
-- Browse sleep: 50ms between requests — prevents server flooding, avoids session timeout
-- NodeID as diff key — stable identifier, survives tag renames
+Working on: outbound prospecting (lemlist) for US/UK/France/Benelux industrial IT contacts, drafting personalized outreach emails, and a docs-integrity pass (found + partially fixed stale/contradictory content in `mindset.md`/`context_starter.md`, found unsourced claims in the pitch copy, deleted hand-tuned demo KG data).
+Last decision: KG's demo Event/Cost data (40+40 nodes, hand-tuned per `analysis_log.md` Entries 133/135) was deleted — the KG currently holds only real structural data (Equipment/Site/Area/WorkCenter/Tag/SchemaMapping from the OPC-UA/ERP simulators), no micro-stop/cost numbers, until reseeded or fed real data.
+Current blocker: none outstanding from this pass — `docs/decisions.md` (restored 2026-07-28) is untracked in git; commit it when you're ready to make the restore permanent.
 
 ---
 
-## What is NOT built yet (next sessions)
+## What is actually BUILT and working (per `CLAUDE.md`, verify there for full detail)
 
-| Module | File target |
-|--------|-------------|
-| Behavioral inference (10-15 min live pattern matching) | `internal/classifier/behavioral.go` |
-| SLM Phi-3 via Ollama (tag classification) | `internal/classifier/slm.go` |
-| UNS ISA-95 mapper (tag → Site/Area/WorkCenter/Tag) | `internal/uns/mapper.go` |
-| Rules engine core | `internal/rules/engine.go` |
-| Micro-stop detection (Run→Stop→Run, 30s < t < 3min) | `internal/rules/microstop.go` |
-| Energy waste detection (Modbus TCP) | `internal/rules/energy.go` |
-| Causality (tag correlation at stop timestamp) | `internal/rules/causality.go` |
-| Fuzzy Join OT/IT (±10 min sliding window) | `internal/fuzzy/join.go` |
-| Cost model V0 (manual 3-field: Coût_Horaire, Cadence, Marge_Produit) | `internal/cost/model.go` |
-| TRS calculator (real availability, OEE, gain potential) | `internal/cost/trs.go` |
-| SQLite ring buffer (7-15 days, TTL auto-purge) | `internal/storage/sqlite.go` |
-| HTTPS push to cloud (TLS 1.3 + mTLS, offline queue) | `internal/push/cloud.go` |
-| SMTP / Slack alerting from Edge | `internal/alerting/smtp.go` |
-| Modbus TCP connector | `internal/discovery/modbus.go` |
-| Siemens S7 connector | `internal/discovery/s7.go` |
-| React local dashboard (Gantt, Pareto, ROI tabs) | `frontend/src/` |
-| Cloud API receiver (Go, events handler) | `api/handlers/events.go` |
+- OPC-UA connect/browse/subscribe, live tag ingestion, ISA-95 auto-mapping with confidence scoring (`internal/uns`)
+- MQTT-based decoupling between `cmd/server` and `cmd/agent` (raw → contextualized → event topics)
+- Rules engine: Run/Stop state tracking, micro-stop detection
+- Cost calculation (manual/config/tag rate sources, CSV/Excel per-product tables)
+- SQLite-backed unified Knowledge Graph (`business` + `platform` categories), with structural auto-bootstrap from both OPC-UA (OT side) and SQL schema discovery (IT side, `SchemaMapping` nodes), confidence-gated pending/validate/reject workflow
+- Entity resolution: OT `Equipment` ↔ IT `work_center` matching (`same_as` edges)
+- Active-production tracking from a validated ERP `work_order` mapping, merged with cost-priority ranking (urgency vs. cost as two distinct, sometimes-disagreeing axes)
+- MCP server, 5 tools, both HTTP (`/mcp`) and stdio transports (Claude Desktop-compatible)
+- Pipeline Studio (drag-and-drop, ReactFlow), KG viewer (Cytoscape) with pending-validation UI, real-time dashboard (WebSocket-driven)
+- i18n (FR default / EN toggle)
+- `cmd/erpsim` fake-ERP dev stack for exercising the SQL connector end-to-end
 
----
+## What is NOT built yet
 
-## POC scope (active target)
-
-Three use cases in one POC:
-1. **Micro-stop detection** — OPC-UA, 5 key tags
-2. **OT/IT reconciliation** — Fuzzy Join ±10 min, ERP production orders
-3. **Energy waste detection** — Modbus TCP energy meters
-
-**Required tags:**
-```
-Etat_Machine        (Boolean / Int — Run/Stop/Setup/Alarm)
-Compteur_Pieces     (cumulative Int)
-Vitesse_Instantanee (Float, analog)
-Capteur_Bourrage    (Boolean — jam sensor)
-Pression_Air        (Float, bar)
-Puissance_Electrique (Float, kW — Modbus TCP if not in SCADA)
-```
-
-**Cost model V0:** manual 3-field wizard (Coût_Horaire €/h, Cadence unités/h, Marge_Produit €/unité)
-**Cost model V1:** automatic import from ERP via SQL/REST connector
-
-**POC success criterion:**
-> Docker install in 1 command → automatic OPC-UA connection → micro-stop detection
-> → OT/IT reconciliation → energy waste → dashboard with € losses by production order
-> — in under 48h on site.
+- Local LLM / SLM (Phi-3, Ollama) — no local inference runtime in the repo
+- Behavioral inference / tag classification beyond the ISA-95 depth/collision heuristics already in `internal/uns`
+- Redpanda Connect or any pipeline engine other than the custom Go one
+- Modbus and Siemens S7 connectors — `modbus_read` is a metadata-only stub that errors if executed; S7 isn't started
+- Any cloud tier (Hybrid/Self-Hosted editions, cross-site KG aggregation, remote dashboard, license-key distribution) — everything today runs on one machine
+- Automatic pipeline triggering from live MQTT — pipelines only run via manual/API-triggered `Run`, see `CLAUDE.md`'s "Known limitations"
+- Retroactive/historical product-scoped queries ("how long did product X run yesterday") — only live/current-moment queries are answered today
 
 ---
 
-## Claude session protocol
+## Session protocol
 
 ```
 START OF SESSION
-1. Open claude.ai (architecture/decisions) or Claude Code (active coding)
-2. Paste context_starter.md
-3. Describe session objective
+- Claude Code in this repo: CLAUDE.md loads automatically, no need to paste this file.
+- claude.ai / web chat (architecture, strategy, no repo access): paste this file.
 
 DURING SESSION
-- Architecture / decisions  → claude.ai (chat)
-- Active code in repo       → Claude Code (terminal in repo folder)
-- Debug                     → paste code + error + context
+- Architecture / decisions   → claude.ai (chat) or ask Claude Code to read docs/analysis_log.md
+- Active code in repo        → Claude Code (terminal in repo folder)
+- Debug                      → paste code + error + context
 
-END OF SESSION
-- Ask: "Summarize technical decisions made today"
-- Update decisions.md
-- Update context_starter.md (section "Current stage")
-- Commit: git commit -m "session: [topic]"
+END OF SESSION (if the session produced a real decision or state change)
+- Log it in docs/analysis_log.md (project convention — see MEMORY.md "Analysis Log Convention")
+- Update this file's "Current stage" section
+- Commit if asked to — never commit automatically
 ```
