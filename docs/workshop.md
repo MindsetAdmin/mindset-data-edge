@@ -32,7 +32,7 @@ Dites-nous ce que vous en pensez : Oui ou Inutile
 Étapes suivantes
 [Le groupe] Préparer mail type: Finaliser et consolider un mail type d outreach adaptant le message aux profils ICP cibles.
 [Cecilia Tran] Hiérarchiser insights: Hiérarchiser et classifier les insights collectés au cours des derniers mois pour prioriser le plan de travail.
-[Mohamed KHENAFIF] Discovery technique: Réaliser des entretiens de découverte avec des CTO pour explorer les besoins en données et préparer la stratégie technique.
+[Mohamed KHENAFIF] Discovery technique: Réaliser des entretiens de découverte avec des CTO pour explorer les besoins en données et préparer la stratégie technique. Questions préparées : voir `docs/discovery_questions_cto_2026-08-25.md`.
 [Mohamed KHENAFIF] Analyser robotique: Analyser l état de l art en robotique et identifier les modèles technologiques implémentables dans le secteur des usines.
 [Cecilia Tran] Discovery physique: Mener des discussions de découverte pour comprendre comment les acteurs du terrain préparent leurs données pour l intégration des modèles d IA physique.
 [Jalil Chikhi] Partager transcript: Partager le transcript de la session de brainstorming enregistrée avec les autres participants.

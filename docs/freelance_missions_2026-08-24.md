@@ -1,80 +1,67 @@
-# Missions freelance disponibles — recherche 2026-08-24
+# Missions freelance disponibles — recherche 2026-08-24 (mise à jour lignes + liens)
 
 Contexte : cherche des missions freelance qui servent MindSet Data (paid discovery / data & architecture / audit court), pas d'entité créée pour l'instant donc facturation en nom personnel. Voir l'échange avec Cécilia et le cadrage dans `docs/analysis_log.md` pour le raisonnement complet.
 
 **Rien de ce qui suit n'a été postulé.** Recherche uniquement — les annonces expirent vite, à revérifier directement sur les plateformes avant de postuler.
 
----
-
-## Free-Work — recherche publique, résultats vérifiés en direct (2026-08-24)
-
-### Courtes, forte pertinence data/architecture (meilleur match)
-| Mission | Client | Durée | TJM | Détail |
-|---|---|---|---|---|
-| **Consultant Senior / Expert Data Semantic Layer (Audit & REX)** | Actual Talent | **2-3 jours max** (sprint/audit/REX) | 650 €/j | Full remote. Audit d'une couche sémantique data (Lightdash SL vs Cube SL vs dbt SL/MetricFlow), recommandations modélisation/gouvernance. Démarrage fin août/début septembre 2026. Proche d'une version manuelle du travail de modélisation/scoring que fait MindSet Data. |
-
-### Courtes/moyennes, IT audit générique (pertinence plus faible, secteur bancaire pas industriel)
-| Mission | Client | Durée | TJM | Détail |
-|---|---|---|---|---|
-| Consultant Audit Production IT (H/F) | DCS EASYWARE | **10-15 jours** | - | Secteur bancaire, sept-oct 2026. Audit exploitation/supervision, gestion incidents ITIL. |
-| Auditeur production IT | JCW Search | **1 mois** | 500-1k €/j | Secteur bancaire. Supervision infra, batchs nocturnes, ITIL. |
-| Architecte Applicatif – Audit & Urbanisation | CAT-AMANIA | **40 jours** | - | Audit technique/architectural, cartographie C4, dette technique — méthodologie réutilisable même hors industriel. |
-| Architecte Logiciel / Auditeur Technique et Sécurité Plateforme Data | CAT-AMANIA | **3 mois** | - | Audit sécurité + architecture d'une plateforme data (secteur scientifique/géologique europeen). |
-
-### Longues, mais forte pertinence industrielle OT/IT (pour info — pas "courtes")
-| Mission | Client | Durée | TJM | Détail |
-|---|---|---|---|---|
-| Architecte SI Industriel/OT | Groupe Aptenia | 12 mois renouvelable | - | Île-de-France, grand compte. Architecture IT/OT industrielle, SCADA hybride local/central, cyber (zoning, NIS2). Le meilleur match thématique de toute la recherche, mais trop long pour un format "mission courte". |
-| Consultant Automatisme Industriel IT/OT | ESENCA | Non confirmée | - | Lille. À vérifier directement — trouvé via recherche, durée non capturée. |
-
-**Repère tarifs (marché)** : architecte réseau/systèmes industriel OT, 600-950 €/jour selon expérience et criticité ([travail-industrie.com](https://travail-industrie.com/fiche-tjm/architecte-reseau-industriel)).
-
-Toutes trouvées sur **[free-work.com/fr/tech-it/jobs/audit](https://www.free-work.com/fr/tech-it/jobs/audit?contracts=contractor)** — recherche par titre exact + nom du client pour retrouver l'annonce (les liens directs n'ont pas pu être extraits proprement depuis l'outil de navigation).
+**Note sur les liens** : l'outil de navigation n'a pas pu extraire les URL individuelles de chaque annonce (bug connu du navigateur cette session). Chaque lien ci-dessous pointe vers une recherche Free-Work filtrée sur le titre exact de la mission — ça amène directement au bon résultat (souvent en première position), pas vers une page générique.
 
 ---
 
-## Malt — limitation d'accès (2026-08-24)
+## Free-Work — accessibles (pas de gate "senior" explicite) — priorité
 
-**Contrairement à Free-Work, Malt n'expose pas ses missions publiquement.** Vérifié : consulter les missions disponibles nécessite un compte freelance (inscription gratuite, email ou LinkedIn). Impossible de lister des annonces concrètes sans se connecter avec ton propre profil.
+- **[Développeur React / Golang — Mindquest, 3 mois, Lille](https://www.free-work.com/fr/tech-it/jobs?query=D%C3%A9veloppeur+React+Golang+Mindquest&contracts=contractor)** — Backend Golang + frontend React, microservices, Kubernetes, CI/CD, culture SRE. Aucune mention de séniorité dans l'annonce. **Meilleur match de stack, sans barrière d'expérience affichée.**
+- **[Développeur Go — Mindquest, 3 mois, Paris, 400-500 €/j](https://www.free-work.com/fr/tech-it/jobs?query=D%C3%A9veloppeur+Go+Mindquest+r%C3%A9f%C3%A9rentiel+client&contracts=contractor)** — Go, API REST, microservices, référentiel client. Demande de l'autonomie mais pas de niveau "senior" explicite.
+- [Développeur Backend Go — MLMCONSEIL, 1 an](https://www.free-work.com/fr/tech-it/jobs?query=D%C3%A9veloppeur+Backend+Go+MLMCONSEIL&contracts=contractor) — Golang, Kafka, Kubernetes, PostgreSQL/MySQL, référentiel "critique" — pas de gate senior affiché mais responsabilité réelle, TJM annoncé (100-450€/j) peu fiable.
+- [Auditeur production IT — JCW Search, 1 mois, 500-1k €/j](https://www.free-work.com/fr/tech-it/jobs?query=Auditeur+production+IT+JCW+Search&contracts=contractor) — Secteur bancaire, ITIL, pas de niveau explicite demandé.
 
-Ce qu'on sait quand même, en repère de marché (recherche 2026-08-24) :
-- Architecte réseau/systèmes industriel : 600-950 €/jour selon expérience.
-- Architecture IT généraliste : 500-800 €/jour.
-- Une mission urgente "Architecte SI/OT" grand compte Île-de-France a été repérée en indexation Google (probablement la même famille que l'annonce Aptenia trouvée sur Free-Work), 12 mois renouvelable — pas courte non plus.
+## Free-Work — écartées, gate "senior/expert" explicite dans l'annonce
 
-**Action nécessaire de ton côté** : créer un compte freelance sur malt.fr (gratuit) pour voir les missions réellement ouvertes en ce moment — je ne peux pas contourner ça depuis une recherche publique.
+- ~~Consultant **Senior** / Expert Data Semantic Layer — Actual Talent, 2-3 jours, 650€/j~~ — titre du poste lui-même.
+- ~~Développeur Full Stack / Architecte Applicatif — Ness Technologies, 3 mois~~ — "Développeur(se) Full Stack **Senior**", remplace le référent technique historique avec pleine autonomie d'architecture.
+- ~~Ingénieur DevOps Services Cloud – **Senior** — RIDCHA DATA, 1 an~~ — titre du poste.
+- ~~Architecte Applicatif – Audit & Urbanisation — CAT-AMANIA, 40 jours~~ — "Architecte Applicatif **Senior** (H/F)".
+- ~~Architecte SI Industriel/OT — Groupe Aptenia, 12 mois~~ — pas labellisé "senior" explicitement, mais rôle d'architecte grand compte, en pratique quasi toujours réservé à un profil expérimenté.
+- ~~Développeur Golang Confirmé/Senior — Hito, 1 an~~ — "Confirmé **ou** Senior", même recherche ciblée n'a rien trouvé d'autre.
+- ~~Architecte Logiciel / Auditeur Technique et Sécurité Plateforme Data — CAT-AMANIA, 3 mois~~ — "renforcer l'équipe d'architecture", contexte européen scientifique, profil confirmé attendu implicitement.
+- ~~Consultant Audit Production IT — DCS EASYWARE, 10-15 jours~~ — pas de "senior" affiché mais périmètre large (exploitation/supervision/ITIL) qui présuppose de l'expérience en production.
+- ~~Consultant Automatisme Industriel IT/OT — ESENCA, Lille~~ — durée non confirmée, mais même famille que l'annonce Aptenia (grand compte, architecte).
 
----
+**Constat honnête après une recherche ciblée "Golang confirmé"** : un seul résultat, et il demande "Confirmé **ou** Senior" — le marché freelance sur ce créneau est structurellement orienté profils expérimentés (les clients qui embauchent en freelance veulent généralement quelqu'un d'opérationnel sans montée en compétence). Ce n'est pas un problème de recherche, c'est une vraie caractéristique du marché.
 
-## Comet — vérifié (2026-08-24), pas un job board
+**Piste pour contourner ça** : sur les 4 missions retenues ci-dessus, l'argument de vente le plus fort n'est pas "X années d'expérience" mais **ce que tu as concrètement construit** — CTO d'une plateforme en production (Go + React + KG + connecteurs OT/IT), c'est un portfolio plus convaincant qu'un badge "senior" pour ce type de mission courte/moyenne.
 
-Le site a changé de modèle depuis la dernière recherche générale : **comet.co ne liste plus aucune mission publiquement.** L'ancienne URL (`/fr`) affiche "cette page n'existe plus" et redirige vers le nouveau site, qui s'est repositionné en **cabinet de conseil en technologie** (pas une place de marché en libre accès) — page d'accueil orientée clients grands comptes ("Nous contacter"), aucun lien "voir les missions" ou "postuler" trouvé dans la page. Même limitation que Malt, en pire : pas de compte freelance en self-service visible non plus, l'entrée se fait a priori via candidature/prise de contact directe avec Comet. Rien de concret à lister depuis cette plateforme pour l'instant.
-
----
-
-## Free-Work — missions alignées avec le stack réel (Go/Golang, React, architecture backend, data) — recherche 2026-08-24
-
-Recherche ciblée sur les compétences effectives (Go, architecture applicative, data/IoT) plutôt que sur la seule catégorie "Audit". 105 résultats au total sur la requête "Golang" — sélection des meilleurs matches par pertinence de stack :
-
-| Mission | Client | Durée | TJM | Pourquoi ça matche |
-|---|---|---|---|---|
-| **Développeur React / Golang** | Mindquest | **3 mois**, Lille | non précisé | Stack quasi identique à MindSet Data : backend Golang + frontend React, microservices, Kubernetes, CI/CD, culture SRE (observabilité, monitoring). Le meilleur match de stack trouvé, tous critères confondus. |
-| **Développeur Full Stack / Architecte Applicatif H/F** | Ness Technologies | **3 mois**, Île-de-France | non précisé | Backend Go, modélisation de données, décisions d'architecture en autonomie, **et une partie "Innovation" citant explicitement IoT/objets connectés/automatisation**. Secteur logistique (solutions logistiques) — pas industriel pur mais adjacent, et pertinent pour le fil supply chain de `tarik.md`. |
-| **Développeur Go** | Mindquest | **3 mois**, Paris | 400-500 €/j | Go, API REST, microservices, référentiel client — mission Go "pure" bien scopée, TJM crédible et cohérent avec le marché. |
-| Développeur Backend Go | MLMCONSEIL | 1 an | 100-450 €/j (fourchette suspecte, probablement mal renseignée) | Golang, Kafka, Kubernetes, PostgreSQL/MySQL — bon stack mais duree longue et TJM à vérifier directement, la fourchette annoncée est trop large pour être fiable telle quelle. |
-| Ingénieur DevOps Services Cloud – Senior | RIDCHA DATA | 1 an | non précisé | Go, Kubernetes, conception d'un "système agentique", conformité ISO 27001/HDS — thématiquement proche (agentique + Go) mais long et plus DevOps/cloud que data/architecture. |
-
-**Non retenues** : la plupart des résultats "architecte technique" génériques (SD-WAN, Digital Workplace, Kubernetes/OpenShift infra) trouvés dans une recherche précédente ne matchent pas le stack réel (pas de Go, pas de data/IoT) — écartées de cette liste malgré des TJM parfois élevés (jusqu'à 950€/j), parce que la compétence demandée n'est pas la tienne.
-
-Toutes trouvées sur **[free-work.com/fr/tech-it/jobs?query=Golang&contracts=contractor](https://www.free-work.com/fr/tech-it/jobs?query=Golang&contracts=contractor)**.
+**Repère tarifs (marché)** : architecte réseau/systèmes industriel OT, 600-950 €/jour selon expérience et criticité ([travail-industrie.com](https://travail-industrie.com/fiche-tjm/architecte-reseau-industriel)) — repère de marché uniquement, pas une cible réaliste vu la barrière senior.
 
 ---
 
-## Synthèse — meilleures options par critère
+## LinkedIn — vérifié (2026-08-24), faible pertinence pour ce type de recherche
 
-- **Le plus court** : Data Semantic Layer (Actual Talent, 2-3 jours, 650€/j) — voir section Free-Work Audit plus haut.
-- **Le meilleur match de stack** : Développeur React / Golang (Mindquest, 3 mois, Lille) — c'est littéralement le stack de MindSet Data.
-- **Le meilleur pont vers le produit** : Développeur Full Stack / Architecte Applicatif (Ness Technologies, 3 mois) — Go + données + IoT + secteur logistique, proche à la fois du stack technique et du fil supply chain.
-- **Le plus "industriel pur" mais long** : Architecte SI Industriel/OT (Aptenia, 12 mois) — voir section précédente.
+Deux recherches menées : [`Golang freelance` en France](https://www.linkedin.com/jobs/search/?keywords=Golang%20freelance&location=France&f_JT=C) (82 résultats) et [`architecte OT IT industriel freelance`](https://www.linkedin.com/jobs/search/?keywords=architecte%20OT%20IT%20industriel%20freelance&location=France) (82 résultats).
 
-Comet et Malt restent fermés à la recherche publique — nécessitent respectivement une prise de contact directe et un compte freelance créé de ton côté.
+**Verdict honnête** : LinkedIn Jobs n'est pas un bon outil pour ce type de recherche. Contrairement à Free-Work, ce n'est pas un board dédié freelance — même avec le filtre "Contrat" et le mot-clé "freelance", les résultats sont dominés par des CDI et des postes "Promoted" hors-sujet (C# Developer, Ruby on Rails, Game Developer, Architecte SIP/Centrex, Low Code OutSystems...). Aucun résultat ne matche vraiment le stack Go/OT-IT.
+
+Seule mission notable, explicitement freelance mais hors-domaine : **[Full-Stack Engineer - People Products (Freelance) — Qonto, Paris (Hybrid)](https://www.linkedin.com/jobs/search/?keywords=Golang%20freelance&location=France&f_JT=C)** — freelance confirmé, mais produit RH, pas data/industriel.
+
+**Conclusion** : ne pas prioriser LinkedIn pour ce type de recherche — Free-Work reste largement supérieur pour trouver des missions freelance qualifiées sur ce créneau.
+
+---
+
+## Malt — limitation d'accès
+
+Malt n'expose pas ses missions publiquement (nécessite un compte freelance, gratuit). Repère marché : architecte réseau/systèmes industriel 600-950 €/j, architecture IT généraliste 500-800 €/j. **Action nécessaire de ton côté** : créer un compte sur malt.fr pour voir les missions ouvertes.
+
+## Comet — plus un job board
+
+Repositionné en cabinet de conseil, aucune mission listée publiquement, entrée par prise de contact directe uniquement.
+
+---
+
+## Synthèse — meilleures options par critère (après filtrage séniorité)
+
+- **Le meilleur match global** : Développeur React / Golang (Mindquest, 3 mois, Lille) — stack quasi identique à MindSet Data, aucune barrière senior affichée.
+- **Le mieux payé sans gate senior** : Développeur Go (Mindquest, Paris, 3 mois, 400-500€/j).
+- **Le plus court sans gate senior** : Auditeur production IT (JCW Search, 1 mois) — mais hors-domaine (bancaire, pas data/industriel).
+- **Toutes les missions "courtes et thématiquement parfaites" trouvées précédemment (Data Semantic Layer, architecte industriel OT) exigent explicitement un profil senior** — écartées, voir section dédiée ci-dessus.
+
+Free-Work reste la meilleure source sur ce créneau. LinkedIn, Malt et Comet n'ont rien apporté de comparable.
