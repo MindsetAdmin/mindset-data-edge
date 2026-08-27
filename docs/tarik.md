@@ -484,6 +484,16 @@ Discussion réelle entre Cécilia et Daouda (expert procurement) sur la qualité
 4. Surveillance des signaux faibles (**exactement le moteur déjà conçu**).
 5. Qualification de plusieurs fournisseurs / dual sourcing (décision humaine, informée par le scoring de l'outil).
 
+### Confirmation supplémentaire de Cécilia (2026-08-27) — pas un cas isolé, et une règle de pricing qui en découle
+
+Cécilia précise que ce n'est **pas la première fois** qu'on lui fait ce retour (qualité de donnée de base + IA/tooling par-dessus n'a pas de valeur si les systèmes principaux ne sont pas à jour ou sont erronés) — plusieurs calls indépendants convergent vers le même constat, pas une anecdote isolée de Daouda. Aujourd'hui, la parade des entreprises est humaine (superviseurs, encouragement des employés à bien remplir les données) — "sans bonne volonté tu peux pas y faire grand chose."
+
+**Règle de pricing/positionnement qui en découle, déjà vérifiée par elle en calls** : le "cleaning et bon remplissage de la donnée" **n'est pas une priorité pour le management — ils ne paieraient pas pour ça**. Ce pour quoi ils paieraient, c'est un **outcome précis et chiffré** : "cette donnée a été envoyée au bon endroit au bon moment, ce qui a diminué l'inaccuracy de X% et évité X€ de pertes de coûts globaux." **C'est exactement la même règle que celle donnée par Geneviève dans `docs/call_oss_venture.md`** ("vendre un ROI financier direct sur un use-case précis, pas collecter pour collecter") — deux conversations indépendantes, à des moments différents, convergent vers la même règle : ne jamais vendre la qualité/collecte de donnée comme le livrable, toujours vendre l'outcome métier chiffré qu'elle permet.
+
+**Exemple concret donné (à garder comme illustration canonique)** : même en automatisant certaines communications entre équipes, si un manager supply est censé noter le résultat d'un call fournisseur et mettre à jour le système juste après, mais qu'il le fait 2h plus tard ou le remplit mal — "tu peux pas faire grand chose." Le goulot d'étranglement humain de dernière minute reste un risque résiduel, quelle que soit la qualité de l'outil en aval.
+
+**Implication de conception qui en découle (ajout, pas dans le message de Cécilia)** : ça justifie de prioriser, dans la conception du moteur de signaux, les sources qui viennent **directement d'un système ou d'un événement machine** (champ ERP mis à jour automatiquement, registre de certification, changement d'état machine) plutôt que celles qui dépendent d'un humain qui doit remarquer-et-saisir une information après coup. Les premières sont réellement sûres à construire dessus ; les secondes portent cette fragilité de façon irréductible, quelle que soit la qualité de la plateforme construite par-dessus.
+
 service id : service_rem7zsp
 passeword : Mindset26
 Template id : template_rem7zsp
