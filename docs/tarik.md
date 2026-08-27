@@ -463,6 +463,27 @@ Sources réelles, vérifiées (recherche web 2026-08-11), pas des catégories g�
 **Priorité pour un premier pilote pointant vers un cas aéronautique type Airbus** : **Pappers (gratuit, API simple) + IAQG OASIS (gratuit, officiel, directement pertinent au secteur)** couvrent déjà une bonne partie du Palier 0 sans coût ni complexité d'intégration significative — le point de départ le plus réaliste technique et budgétairement.
 Même avec un démarrage par paliers, le partage de données inter-entreprises demande un vrai travail juridique (accords de confidentialité, contrats de traitement de données, question de responsabilité si un signal de risque est faux et qu'une décision est prise dessus) — de la complexité de cycle de vente que le pitch actuel (déploiement mono-site) n'a pas. Et c'est un type de produit différent — une plateforme réseau multi-parties, pas un déploiement mono-site — à voir comme un choix stratégique à part entière, pas juste un nouveau cas d'usage greffé sur le pitch existant.
 
+---
+
+## 6. Validation terrain — échange Cécilia / Daouda, procurement (source : `docs/Resume échanges.md`)
+
+Discussion réelle entre Cécilia et Daouda (expert procurement) sur la qualité de donnée en achats/inventaire/supply chain — exactement le type de discovery call que Cécilia a poussé à multiplier plutôt que de rester en recherche documentaire pure.
+
+**Signaux faibles fournisseur qu'il utilise réellement** : retards répétés, hausse de prix, baisse de qualité, faiblesse de réactivité, non-respect des exigences qualité/réglementaires. **Ça valide indépendamment les catégories déjà conçues pour le Palier 0/1** (§"Réponse technique" et §5) — un vrai procurement expert utilise exactement ce type de signal, pas une catégorie inventée en l'air.
+
+**Racines concrètes des problèmes de donnée qu'il a citées** (plus précises que ce qu'on avait) : stock mal renseigné, "demandes fantômes" (le système affiche un besoin déjà satisfait), commandes passées hors système (achat lancé avant l'enregistrement ERP), paramètres ERP non à jour. Chaîne de conséquences : surstock/rupture → surcoûts administratifs → retards de production → perte client → baisse de marge.
+
+**Sa pratique recommandée** : scorer les fournisseurs régulièrement, qualifier plusieurs sources (dual sourcing), sécuriser les achats critiques par contrat ou stock minimal — confirme que le scoring fournisseur (le moteur déjà conçu en §1/§1bis) est une pratique procurement standard, pas une idée théorique de Mindset Data.
+
+**Mise en garde importante, à ne pas lisser** : Daouda a été explicite — *"un outil seul ne suffit pas : il faut toujours un humain ou une équipe dédiée pour surveiller, corriger et actualiser les données."* Le problème est autant humain/procédural (respect des procédures d'achat, mise à jour disciplinée des systèmes) que technique. Ça borne honnêtement ce que Mindset Data peut promettre : le moteur de scoring/détection de signaux faibles peut *appuyer* une équipe procurement, il ne la remplace pas — cohérent avec la discipline déjà tenue tout au long de ce document (pas de survente d'automatisation totale).
+
+**Processus en 5 étapes qu'il a décrit** — utile pour situer où Mindset Data intervient vs. où ça reste humain :
+1. Respect des procédures d'achat (humain/organisationnel — hors périmètre outil).
+2. ERP propre, données à jour (partiellement outillable — mais nécessite discipline humaine en amont).
+3. Scoring fournisseur régulier (**exactement le moteur déjà conçu**).
+4. Surveillance des signaux faibles (**exactement le moteur déjà conçu**).
+5. Qualification de plusieurs fournisseurs / dual sourcing (décision humaine, informée par le scoring de l'outil).
+
 service id : service_rem7zsp
 passeword : Mindset26
 Template id : template_rem7zsp
