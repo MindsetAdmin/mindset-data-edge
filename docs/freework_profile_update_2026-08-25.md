@@ -8,8 +8,8 @@ Positionnement retenu : **hybride** — systèmes embarqués temps réel (track 
 
 ## Champs à mettre à jour
 
-**Titre actuel**
-> CTO & Ingénieur logiciel — Systèmes temps réel & architecture de données industrielles (C/C++, Go, React)
+**Titre actuel** *(limite Free-Work : 100 caractères max — la version précédente dépassait, corrigée ci-dessous, 93 caractères)*
+> CTO & Ingénieur logiciel — Temps réel & architecture données industrielles (C/C++, Go, React)
 
 **Statut recherché** → Freelance
 
@@ -19,7 +19,7 @@ Positionnement retenu : **hybride** — systèmes embarqués temps réel (track 
 
 **Rémunération** → ancrage proposé **400-550 €/j** (à ajuster selon la mission)
 
-**Métiers recherchés (à étoiler, max 3)** → focalisés sur ce qui touche à MindSet Data : CTO / Directeur technique / Développeur Backend Go / Architecte technique — Data *(vérifier les libellés exacts dans la taxonomie Free-Work, garder 3 max)*
+**Métiers recherchés (à étoiler, max 3)** → focalisés sur full-stack : Développeur Full-Stack / Développeur Backend Go / Développeur Frontend React *(vérifier les libellés exacts dans la taxonomie Free-Work, garder 3 max)*
 
 ---
 
