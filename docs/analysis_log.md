@@ -9115,3 +9115,681 @@ Do you want me to push these doc updates now (in one batch — ~20 min of edits 
 
 I'd recommend the second option — do Entry 40 + Entry 41 + the security framework lock (still pending from Entry 20) as ONE big batch when you've decided all three. Less doc churn, less version-of-the-Excel proliferation.
 
+---
+
+## Entry 165 — 2026-08-29 — Reviewing `plan_tech_workshop_2026-08-282.xlsx`'s robotics section: CTO scope cut, and "don't presuppose the architecture" correction
+
+Reviewing the robotics rows (Sheet 1, Topics 7-11) of the tech workshop plan built Entries in `docs/robotique_analyse_2026-08-24.md`, ahead of the follow-up workshop. Two corrections from Mohamed, in sequence.
+
+### Correction 1 — Mohamed's slide is technical-only, not business
+
+Mohamed is presenting as CTO. Business/KPI framing (market-size figures, deployment-count stats, ROI/profitability claims) is Cécilia's lane per the original `workshop.md` task split ("Hiérarchiser insights" = Cécilia, "Discovery technique" = Mohamed), not something to re-litigate on his slide. Dropped from his cut: Topic 7's $ market-size figures, Topic 11's AMR profitability question.
+
+### Correction 2 — Don't frame robotics around "where our architecture plugs in"
+
+Topic 8 ("où Mindset Data peut jouer un rôle") presumed the current OT/IT architecture is the answer for the robotics ICP. Mohamed's correction: **the startup hasn't locked its final idea yet**, so presenting robotics content as "here's how our existing engine already extends to this" overclaims a decision that hasn't been made. Reframed as architecture-agnostic: state of the art in robot integration protocols/latency, and what a deployed robot needs operationally — domain facts, not a claim about a specific product's fit.
+
+### Revised technical-only robotics cut (3 rows, replacing Topics 7-11's 5 rows)
+
+1. **Feasibility ranking by robot category** (was Topic 9, kept near-verbatim — pure domain fact): AMR (VDA5050/MQTT, open standard) > cobots (REST/webhook, standard pattern) > humanoïdes (ROS2/DDS proven real-time-capable, but VLA inference's 30-100Hz is a different latency regime than typical dashboard/API-polling systems). State explicitly: ease-of-integration order is inverted from media-visibility order.
+2. **What a deployed robot needs operationally** (was Topic 8, reframed from "us" to domain fact): VLA training data (vision+language+action+trajectory) is categorically different from runtime operational context — two separate problems. Physical Intelligence's own models (π0/π0.5/π0.7) are architected to accept structured/textual context at inference time — a general fact about how foundation models consume context, not a claim about any specific integration.
+3. **Open technical questions** (was Topic 10, narrowed to technical-only): no robotics engineer has hands-on verified any integration path yet — protocol compatibility is inferred from spec, not tested; whether a low-latency VLA bridge is worth building is unresolved and depends on which direction gets chosen.
+
+### Update — same lens applied to Supply Chain, and written to the xlsx (2026-08-30)
+
+Mohamed confirmed: apply the same two corrections to the Supply Chain section (Topics 4-6, sourced from `tarik.md`), and explicitly asked to "think out of the box" rather than just mechanically trim business framing.
+
+**Supply Chain reframe** — dropped: Topic 5's original McKinsey market-visibility stat (business, Cécilia's lane) and any "reuses our existing KG engine" framing (presumes an architecture commitment not yet made, same correction as robotics). Kept/reframed as generic mechanism design:
+- **Tiered incentive model** (Palier 0/1/2 + the IMDS precedent — obligatory gate tied to an existing transaction, aggregate signal without revealing identity one level down) — presented as a generalizable design principle, not "how our product already does it."
+- **New, out-of-the-box addition**: the unresolved technical lock isn't the tiering, it's identity-preserving aggregation itself. Proposed angle not previously in any doc — locally-computed, signed/timestamped aggregates instead of a persistent connection, enabling offline/batch submission for suppliers with limited IT, with verifiability via signature rather than a live link. Flagged explicitly as an unverified design proposal, not a built mechanism.
+- **Signal schema validated against real practice** (Daouda's procurement categories — delays, price, quality, responsiveness, non-conformance) — kept, reframed as validating the data model's fields, explicitly separated from any business/pricing claim (the pricing-outcome rule from the same source stays out of this technical topic entirely).
+
+**Written to `plan_tech_workshop_2026-08-282.xlsx`, Sheet 1 ("Plan présentation Tech")**: Topics 4-11 (8 rows) replaced with 6 new rows (3 Supply Chain, 3 Robotics), renumbered 4-9; old Topics 12-15 shifted down to 10-13. Sheet now has 13 topics instead of 15. Sheet 2 ("Matrice de décision") untouched — still uses the original business+technical mixed framing per piste; not yet reframed.
+
+Implementation note: `openpyxl`'s `ws.cell(row, col, value=None)` does NOT clear a cell — `value=None` is treated as "don't set," a no-op, not "clear to empty." Clearing required `ws.cell(row, col).value = None` instead. First write attempt left two stale rows behind silently; caught by reading the file back after write rather than trusting the "saved" print statement.
+
+### Still open
+
+Sheet 2's decision matrix (5 pistes × 10 columns) still mixes business columns (`Preuve de demande business`, `Recommandation`) with technical ones for every piste, including the OT/IT and Supply Chain/Robotics rows just reframed on Sheet 1 — not yet touched, inconsistent with Mohamed's technical-only scope until reviewed. Also flagged, out of scope for this pass: Topic 3 (market-failure-rate statistics) is business framing sitting in a section otherwise about "what's built" (Topics 1-2) — same category of content just dropped from Topics 4-11, left as-is pending Mohamed's call.
+
+
+---
+
+## Entry 166 — 2026-08-31 — Workshop scope corrected to "robotics state of the art"; new research falsified one of our own hypotheses
+
+Mohamed corrected a wrong assumption I'd been working under: the workshop is **about the robotics domain / state of the art** — that's his deliverable as CTO. It is not a five-piste arbitration session, so the demo question I raised (showing the working OT/IT product) is moot. Confirmed choices: deliverable = **md + xlsx**; register = **deliberately two-layer** (plain headline, technical proof underneath for whoever pushes); posture = **argue for a recommendation**, not a neutral briefing.
+
+### Four things flagged before building (out-of-the-box pass)
+
+Raised proactively rather than only answering what was asked: (1) the working product had no plan to be shown anywhere — moot once scope was corrected, but worth having surfaced; (2) the workshop's own stated output (`workshop.md`: *"un plan de travail final concret pour le mois suivant"*) was absent from all 13 topics — they described state, never "what I ship in 4 weeks"; (3) the decision axis that should matter isn't a column in Sheet 2 — **OT/IT is the only piste where new evidence can be generated alone, this week, with nobody's cooperation**, which for a team with zero signed pilots likely outranks complexity or time-to-value; (4) **no kill criteria anywhere** — without them, Jalil's "keep two ICPs in parallel" mechanically degrades into "carry five pistes forever." Point (4) was acted on directly (see below).
+
+### New research (2026-08-31, verified) — three additions beyond anything in the repo
+
+1. **The latency-loop frame.** The useful engineering taxonomy isn't AMR/cobot/humanoid, it's which control loop you're trying to enter: safety (<1ms, certified, closed) · motion/control (1-100ms, determinism required, closed) · task/dispatch (100ms-s, **open**) · planning (s-min, **open**). This reframes the humanoid difficulty precisely: VLA inference at 30-100Hz sits in the *motion* loop, so the layer you'd want to inject context into is the closed one. Not a new fact — a reorganization of facts already in `robotique_analyse_2026-08-24.md` §3bis that makes the conclusion fall out instead of being asserted.
+2. **ISO 10218-1/-2:2025 — the regulatory wall, and it just moved.** First major revision since 2011: functional safety requirements now explicit rather than implied (Performance Levels imposed, documented validation per ISO 13849-1), ISO/TS 15066 folded into 10218-2, new Class I/II classification, and — the load-bearing point — **cybersecurity is now treated as a component of functional safety**. Gives a hard, current, citable boundary: data that *informs* is free; data that *actuates* motion enters the safety case and now the cyber case too. This was entirely absent from our robotics analysis.
+3. **MCP became the de facto agent connectivity layer in 2026**, adopted by OpenAI and Google DeepMind, with 50+ robotics MCP servers including ROS 2 bridges. Logged with its own honest caveat: those bridges let an LLM *introspect and drive* a ROS system — the opposite direction from pushing factory context *to* a robot. Same protocol, opposite flow; explicitly written into the guardrails so it can't be miscited as validation.
+
+### The important one: research falsified our own hypothesis
+
+`robotique_analyse_2026-08-24.md` §8 held that AMR fleets lack factory context and that the WMS carries no production signal. **2026 fleet managers (KUKA, Omron, Kinexon, Fives, Zimmer, Ati) already advertise MES/ERP/WMS integration** — real-time job propagation, "call-for-parts" triggers from production processes, bidirectional SAP/Oracle/Infor sync. Our claim was too broad.
+
+What survives is narrower and more defensible: that integration is **transactional** (an order, a part request, a movement event), not **live OT state** (machine down 4 seconds ago, quality drift at fine granularity). Kept as a real distinction, but one that cannot be settled from a desk — and the discovery question written on 24/08 (*"does your fleet have visibility on factory context?"*) is now **dead on arrival**, since the 2026 answer is "yes, we're MES-integrated." Replaced with a question that separates transactional from live: *"Your fleet gets orders from the MES. Does it also get live machine state — and if a machine goes down right now, how long before the fleet knows and re-sequences?"*
+
+Also found: IMTS 2026 has a session titled *"Architecting Interoperable AMR Ecosystems: Bridging the Gap Between Shop Floor Logistics and Machine Throughput"* — precisely the gap we hypothesized. Logged with the caveat that **only the title was verifiable**; both article URLs fetched empty, so it is cited as evidence the industry is discussing the question, never as evidence of its content.
+
+### Deliverables
+
+- **`docs/robotique_etat_art_workshop_2026-08-31.md`** (new) — the presentable state-of-the-art brief, replacing `robotique_analyse_2026-08-24.md` for workshop use (that one stays as the full working trace). Two-layer throughout, argued recommendation in §7, explicit kill criterion, "what we still don't know" in §8, five guardrails, full sources.
+- **`plan_tech_workshop_2026-08-282.xlsx`** — new first sheet **"État de l'art robotique"** (10 rows), columns `N° | Sujet | Niveau 1 — à dire simplement | Niveau 2 — la preuve technique | Statut | Source`, with the correction, recommendation, and kill-criterion rows highlighted. Sheet 1's three robotics rows (7-9) rewritten to carry the latency-loop frame, the ISO 10218:2025 wall, and the self-correction. Sheet 2 untouched.
+
+### The recommendation now on record
+
+Build nothing yet. Focus the robotics thread on the task/dispatch loop (the only one open without a safety case); target AMR **in production-line settings, not warehouse** (warehouse is covered — WMS routing plus the transactional MES integration just found); ask the reformulated discovery question; two already-identified contacts settle it (Romain Desarzens @ Movu for what the fleet manager actually receives, Khalil Mosrati for what happens when a machine stops); deprioritize humanoids (closed loop + 2028-2032 horizon). **Kill criterion, stated explicitly:** if the fleet manager already receives live machine state, or if event-driven re-sequencing has no perceived value, the robotics thread dies — no grey zone.
+
+### Still open
+
+Sheet 2's decision matrix remains business/technical mixed and now also carries the pre-correction robotics framing (its AMR row still implies the WMS-blindness hypothesis). The credential block at the bottom of `docs/tarik.md` (`service_rem7zsp` / `Mindset26` / `template_rem7zsp`, apparently EmailJS) is still committed and unaddressed — flagged twice, no decision yet.
+
+---
+
+## Entry 167 — 2026-08-31 — `robotique_analyse_2026-08-24.md` merged into the workshop doc and deleted; one doc now owns the robotics domain
+
+Mohamed's call: stop maintaining two robotics documents. `docs/robotique_etat_art_workshop_2026-08-31.md` absorbs the full analysis and becomes the single authoritative doc for the domain; `docs/robotique_analyse_2026-08-24.md` is deleted.
+
+**Supersedes a claim in Entry 166**, which said the 24/08 analysis "stays as the full working trace." It does not — it no longer exists. Entries 165/166 are left unedited (they were accurate when written; the log is append-only) and this entry is the correction.
+
+### Structure of the merged doc
+
+Two parts, so one file serves both purposes without the presentable half being diluted by the raw material:
+- **Partie I — Brief workshop (§0-§9)**: what actually gets presented. Two-layer (Niveau 1 plain / Niveau 2 technical proof), argued recommendation, explicit kill criterion, guardrails. Deliberately architecture-agnostic per the Entry 165 correction.
+- **Partie II — Analyse complète (§10-§17)**: the raw material. Market detail, VLA data requirements, the full 16-point Physical Intelligence conference extraction, protocol-maturity ranking, positioning history, contacts + discovery questions, original honesty check.
+
+### Preservation verified, not assumed
+
+Before deleting, checked 62 distinctive markers from the old file (figures, entity names, contacts, source URLs — `4,2 Md`, `LingBot-VLA`, `700 jours-robot`, `Dandelion Chocolate`, `air fryer`, all 9 contact names, `Ferid`, `SBPROCESS`, `arxiv.org/pdf/2508.10413`, etc.) against the new one. **Zero missing.** Merged file is 44 071 chars / 418 lines vs the old 32 076 / 234 — it grew, nothing was traded away. The uncommitted Arnaud Lubespere addition from 27/08 was carried through too (it would otherwise have been lost with the file, since it was never committed).
+
+### Three things marked rather than silently dropped
+
+Sections that were superseded are annotated in place, not deleted — the reasoning history stays visible:
+1. **§13** (protocol-maturity ranking) — facts intact, but its *framing* is flagged as superseded by §1's latency-loop frame. Present the frame, keep the facts.
+2. **§15** (positioning: "where Mindset Data could play a role") — flagged as predating the "product direction isn't locked, don't presuppose the architecture" decision. Kept as reasoning trace, explicitly not a position to carry into the room.
+3. **§16** (discovery questions) — the question invalidated by Entry 166's fleet-manager finding is struck through (⛔) with the replacement (✅) directly beneath it, in both Track A and Track B, rather than quietly swapped. Anyone reading sees that it changed and why.
+
+### References repointed
+
+`docs/insights_2026-08-21.md` (§2bis/§3 → §12/§15) and `docs/discovery_questions_cto_2026-08-25.md` (§7 → §16) updated. Four xlsx cells repointed: `État de l'art robotique` F2/F7/F10 and `Plan présentation Tech` C3. Repo-wide grep confirms no stale pointer remains outside this log's historical entries and the two intentional mentions in the merged doc explaining the deletion.
+
+**Deletion left unstaged** (plain `rm`, not `git rm`) — the repo has a large uncommitted working tree and staging things Mohamed didn't ask to stage would be presumptuous. It shows as ` D` until he commits.
+
+### Still open (unchanged from Entry 166)
+
+Sheet 2's decision matrix still mixes business/technical and still carries the pre-correction AMR framing. The `docs/tarik.md` credential block (`service_rem7zsp` / `Mindset26` / `template_rem7zsp`, apparently EmailJS) remains committed and unaddressed — flagged three times now, no decision.
+
+---
+
+## Entry 168 — 2026-08-31 — Sheet 2 rebuilt: business column dropped, two missing decision axes added, robotics rows corrected
+
+Last open item from Entries 165-167. `Matrice de décision` still mixed business and technical framing and still carried the pre-correction AMR hypothesis.
+
+### Three changes
+
+**1. Dropped `Preuve de demande business`.** Business validation is Cécilia's lane per the `workshop.md` split; it had no place on the CTO's matrix. This was the original inconsistency flagged in Entry 165.
+
+**2. Added the two axes that were missing** — both previously raised and neither acted on until now:
+
+- **`DÉPENDANCE EXTERNE pour avancer`** — the axis flagged in Entry 166 as the one that should decide this matrix but wasn't a column in it. It separates the pistes far more sharply than complexity or time-to-value do: OT/IT is **the only piste that can produce new evidence with nobody's cooperation**; SC1 is partial (Palier 0 tests alone, utility needs a buyer); SC2 and AMR are fully blocked on someone else answering. For a team with zero signed pilots, this is arguably the decisive column.
+- **`CRITÈRE D'ABANDON`** — the missing kill criteria from Entry 166. Every piste now names what result drops it. Without these, "explore two ICPs in parallel" degrades into carrying five pistes indefinitely.
+
+Also split the old single `Ce qui manque` into `Ce qui manque` + **`VERROU technique principal`**, because the two were being conflated. The distinction matters and now shows: OT/IT has *no* lock (only identified work); SC1's lock is verifiable alone in 1-2 days; SC2's is a design problem, unresolved; AMR's is **not technical at all** — it's a knowledge lock no further desk research can open; humanoids have a double lock (closed control loop + the ISO 10218:2025 safety/cyber case).
+
+**3. Corrected the robotics rows** to carry Entry 166's finding — the AMR row now states plainly that 2026 fleet managers already integrate MES/ERP/WMS and that our "fleets are blind to factory context" hypothesis is invalidated, with only the transactional-vs-live-OT-state gap left open. Its next action carries the reformulated discovery question. The humanoid row now names the closed-loop + regulatory double lock rather than just "different latency regime."
+
+### Result
+
+12 columns × 5 pistes, no empty cells. Decision-critical columns (verrou / dépendance / critère d'abandon) get a distinct header colour; rows colour-coded by verdict — OT/IT green (priority), AMR amber (carries the correction, decidable cheaply), humanoids grey (deprioritised). Frozen first column.
+
+Fixed two anglicisms I introduced while writing it (`prioritiser` → `prioriser`, `déprioritisé` → `dépriorisé`) — caught on readback, not left in a document that gets presented in French.
+
+### Workshop prep now complete
+
+All three sheets coherent and technical-only: `État de l'art robotique` (the workshop topic, 10 rows, two-layer) · `Plan présentation Tech` (13 topics) · `Matrice de décision` (5 pistes, 12 columns). Plus `docs/robotique_etat_art_workshop_2026-08-31.md` as the single authoritative domain doc.
+
+### Still open — one item, non-workshop
+
+The `docs/tarik.md` credential block (`service_rem7zsp` / `Mindset26` / `template_rem7zsp`, apparently EmailJS) remains committed to git history and unaddressed. Flagged four times across this session without a decision. It is the only outstanding item.
+
+---
+
+## Entry 169 — 2026-08-31 — Workshop file hygiene: duplicate contacts merged, superseded draft deleted, plan moved into `docs/`
+
+Three cleanups, all verified before anything was destroyed.
+
+### 1. The duplicate contacts file — neither copy was a superset
+
+`contacts_workshop_2026-08-27.xlsx` existed at repo root *and* in `docs/`, with different content — so "delete the stale one" was the wrong instinct. They had diverged complementarily:
+
+| | Root (6 cols) | `docs/` (7 cols) |
+|---|---|---|
+| `Source / Piste` (Track A / Track B / Discovery CTO) | **populated** | empty |
+| LinkedIn URLs | as cell *hyperlinks* behind display names | as visible URL text |
+| Company | merged into "Entreprise / Poste" | **separate column** |
+
+Deleting either would have lost real information. Merged programmatically instead (read both, key on name): `docs/` structure kept, `Source / Piste` filled from root, hyperlinks reapplied so the LinkedIn column is clickable. **13 contacts, all 13 with a track assignment, all 13 with a working link, zero gaps.** Rows colour-coded by track. Root copy then deleted.
+
+### 2. `docs/plan_tech_workshop_provisoire.xlsx` deleted — after checking its one unique column
+
+The superseded 28/08 draft had a column the rebuilt matrix doesn't: `Connecteurs / travail technique restant`. Checked all 5 of its cells against the current Sheet 2 rather than assuming redundancy:
+- SC1 (Pappers/IAQG OASIS connectors) → covered across `Ce dont on est sûr` + `Ce qui manque`
+- SC2 (supplier-side edge agent, identity-free aggregation) → covered in `Complexité` + `Ce qui manque`
+- Humanoids (real-time bridge from scratch) → covered in `Complexité` + `Ce qui manque`
+- AMR ("mapping des topics VDA5050 vers le schéma KG existant") → **deliberately not carried over** — it presupposes the current architecture, which Entry 165 removed on purpose. Its absence is the decision, not an oversight.
+
+### 3. Plan moved and renamed
+
+`plan_tech_workshop_2026-08-282.xlsx` (repo root, filename a typo for the 28/08 date) → **`docs/plan_tech_workshop_2026-08-28.xlsx`**. All three sheets verified intact after the move. No stale path references remain outside this log's historical entries.
+
+### Result — four workshop files, all in `docs/`
+
+| File | Role |
+|---|---|
+| `docs/workshop.md` | Source of truth — the 24/08 session, decisions, action items |
+| `docs/plan_tech_workshop_2026-08-28.xlsx` | The plan — 3 sheets, technical-only |
+| `docs/robotique_etat_art_workshop_2026-08-31.md` | The deliverable — robotics domain, brief + full analysis |
+| `docs/contacts_workshop_2026-08-27.xlsx` | 13 contacts, merged and complete. Nothing sent |
+
+Down from 6 scattered across two directories, with no information lost in the reduction.
+
+### Still open
+
+Unchanged and now the only outstanding item: the `docs/tarik.md` credential block (`service_rem7zsp` / `Mindset26` / `template_rem7zsp`, apparently EmailJS), committed to git history. Flagged five times this session without a decision.
+
+---
+
+## Entry 170 — 2026-08-31 — Superseded content deleted rather than annotated; duplicate robotics sheet dropped
+
+Mohamed: *"forget the previous wrong ideas, and delete them."* Deletion was ambiguous between two targets and the file is untracked (nothing recoverable from git), so the scope was confirmed before acting rather than guessed: **both** the superseded content in the robotics doc **and** the duplicated xlsx sheet.
+
+### Reversal of the Entry 167 approach
+
+Entry 167 deliberately *annotated* superseded material in place — struck-through questions, "Note du 31/08: superseded", "kept as reasoning trace" — on the reasoning that the history stays visible. Mohamed's call overrides that, and it's the better one for a document that gets presented: a deliverable littered with crossed-out ideas invites questions about the crossed-out ideas. **The reasoning history lives in this log, which is the append-only record; the deliverable does not need to carry it too.**
+
+### Removed from `docs/robotique_etat_art_workshop_2026-08-31.md`
+
+- **§13 "Classement par maturité protocolaire"** — framing superseded by §1's latency-loop frame.
+- **§15 "La question du positionnement"** — the "yeux et oreilles contextualisées de l'usine" framing, which predates the "product direction isn't locked" decision.
+- **The ⛔ struck-through discovery question** in both tracks, plus the note explaining the strike. Only the current question survives, unmarked — it now reads as *the* question, not as a replacement for a bad one.
+- Every "superseded / Note du 31/08 / kept for history" annotation.
+
+### Salvaged before deleting, not lost with the section
+
+§13 carried facts that existed nowhere else in the doc. Moved into §1 before the section was removed:
+- ROS2 + DDS real-time figures (sub-10 ms at 50 Hz; <150 µs with PREEMPT_RT + Fast-DDS) — the fact that establishes real-time itself isn't the blocker.
+- Cobot/arm REST-webhook integration (FANUC, ABB, KUKA, UR).
+- Its four source URLs, relocated into the Sources section.
+
+Verified by diffing old against new on 19 distinctive markers: **zero salvageable facts lost**, and all four intentionally-removed strings confirmed absent.
+
+### Renumbering and the reference it would have silently broken
+
+Sections renumbered §0-§15 (was §0-§17). Cross-references machine-checked: 15 distinct refs, **zero dangling**. The catch worth noting — `insights_2026-08-21.md` pointed at "§12/§15" when §15 was *positioning*; after renumbering §15 became *check d'honnêteté*, so the pointer would have silently aimed at unrelated content rather than breaking visibly. Repointed to §12. This is the failure mode section-number references always have, and it argues for citing section *titles* over numbers in future cross-doc links.
+
+Also retitled §15 from "Check d'honnêteté **original** (26/08)" — "original" was only meaningful while a superseded version existed alongside it.
+
+44 071 → 40 659 chars.
+
+### Duplicate sheet dropped
+
+`État de l'art robotique` removed from `docs/plan_tech_workshop_2026-08-28.xlsx`. It duplicated the md's Partie I in compressed, lossier form (8.8k chars of table cells against 17.4k of prose — the "phrase à dire" lines and the reasoning that makes the latency-loop point land did not survive compression). Two artifacts covering identical ground drift the moment either is edited.
+
+Clean split now: **md = the robotics domain** (brief + full analysis) · **xlsx = the cross-piste planning tool** (`Plan présentation Tech` 13 topics + `Matrice de décision` 5 pistes × 12 columns). The three robotics rows remaining in `Plan présentation Tech` are one line per topic inside a five-piste plan — an index, not a parallel document.
+
+*(The xlsx was open in Excel and locked on the first attempt; caught via the `~$` lock file and a write test rather than reported as done. Retried after Mohamed closed it.)*
+
+### Still open
+
+Unchanged, and now the only item: the `docs/tarik.md` credential block (`service_rem7zsp` / `Mindset26` / `template_rem7zsp`, apparently EmailJS), committed to git history. Flagged six times across this session without a decision.
+
+---
+
+## Entry 171 — 2026-09-01 — The four questions that decide whether the offer survives a technical buyer
+
+Mohamed named the set to prepare thoroughly for the workshop: (1) why isn't this problem solved, technically, given it has existed forever; (2) what do current solutions do; (3) build vs buy, and why us; (4) why not just pay consultants. All from the CTO angle, and validated ideally by calls with factory techs.
+
+**Deliverable:** `docs/questions_fondamentales_workshop_2026-09-01.md` — two-layer format matching the robotics brief, everything numeric sourced, hypotheses tagged `[À VALIDER]` and collected into a call-question section rather than left as soft assertions.
+
+### The organising finding
+
+**Hierarchical asset modeling is 40-60% of UNS implementation effort** — not connectivity, not brokers, not storage. That single number reframes all four questions: it says the bottleneck sits exactly where almost nobody automates, it explains why projects die at pilot (integration cost exceeds any single use case's value), it is what "build" actually costs, and it is what a consultant re-bills for on every new use case. Everything else in the doc hangs off it.
+
+### Q1 — a correction to how we've been describing the problem
+
+We have been sliding toward *"OPC-UA solved transport, not semantics."* **That's wrong and a competent technician will say so** — OPC-UA specifies an information model, and Companion Specifications exist precisely for domain semantics. The defensible formulation is now written as a guardrail: **"the semantic layer exists in the standard; it does not exist in the installed base."** Verified supporting language: without standardised OPC UA data models, engineers cannot rely on predictable structures across multi-vendor equipment.
+
+Seven technical causes documented: semantics-in-standard-vs-in-practice · brownfield 20-30yr capital lifecycles (N connectors, never one standard) · the 40-60% modeling cost · manual mapping doesn't scale *and goes stale* · nobody owns Level 3 (split-incentive: the person feeling pain holds no budget) · incompatible real-time regimes · fragmentation being economically rational for automation vendors.
+
+**The "why now" answer, which the question demands and we didn't have:** three things changed, none true three years ago — LLMs make semantic mapping tractable for the first time (attacking exactly the 40-60% post), edge compute became routine, and the agentic-AI push **exposed the limits of raw operational telemetry**, converting a long-tolerated integration annoyance into a visible blocker with budget attached.
+
+### Q2 — the competitive honesty this forced
+
+The public description of the Industrial DataOps category in 2026 is *"automate the contextualization of IT and OT data from PLCs, MES, and ERP and organize them into unified knowledge graphs."* **That is our sentence.** Written into the doc as something to say ourselves rather than be confronted with. What survives: the market is genuinely nascent (most players under ten years old, several in strong growth), and the real distinction is **template/instance modeling vs deriving the hierarchy from discovery with a confidence gate**.
+
+Flagged `[À VALIDER]`: I have not verified in depth whether HighByte or Litmus have added discovery-driven auto-derivation. Public pages point to templates, but a marketing page does not prove absence of a feature — the same discipline already imposed on the Resilinc/Interos reading in `tarik.md`.
+
+### Q3 and Q4 — arguing from ownership cost, not difficulty
+
+Q3 opens by **conceding that v1 is easy to build** (broker + dashboard = a weekend). Claiming otherwise makes a technician disengage instantly. The argument is the long tail and the ownership cost: maintenance is **65-85% of lifecycle cost**; observed industrial builds run 850K$-1.6M$ and 18-24 months to production then 480K$-950K$/yr (one parity case at 13M$ / 144 engineer-months + 4M$/yr); projects overrun estimates by 40-60%. The human risk is named as the real killer — internal systems orphaned when the engineer leaves, and senior engineers avoiding legacy internal-tools teams.
+
+**When build is correct is stated explicitly** (one site, one use case, few tags; or a 50+ person internal software team; or when the need is the customer's own differentiator) — the deciding variable being the number of use cases expected over three years.
+
+Q4 argues project-vs-product: 50K$-500K$+ per custom integration, 20-35%/yr maintenance, and the SI model being structurally ill-suited to an estate that changes frequently because it rests on bespoke development rather than reusable components. Combined with the podcast's structural point — consultants sell narrative to the C-suite and **capture the trust** of the engineers who actually know the plant. Positions integrators as **channel, not competitor**: the right framing is not "instead of a consultant" but "what the consultant installs."
+
+### Six guardrails
+
+Each is a claim that is tempting, wrong, and would cost credibility with a technical audience: "OPC-UA is only transport" · "nobody does what we do" · "too hard to build yourself" · "consultants are useless" · citing a single aggregated "80% failure" · claiming connector coverage (Litmus advertises 250+; we don't compete there — our argument is the modeling mechanism).
+
+### Still open
+
+Unchanged: the `docs/tarik.md` credential block, flagged seven times, no decision.
+
+---
+
+## Entry 172 — 2026-09-01 — Competitive research on Q2/Q3/Q4 falsified a claim in `mindset.md`: HighByte shipped edge MCP and LLM model generation before us
+
+Mohamed asked for a dedicated document on the last three of the four fundamental questions. Researching them properly produced the most consequential finding of this workshop prep, and it goes against us.
+
+### The finding
+
+**HighByte Intelligence Hub 4.2, released July 2025:**
+- An **embedded Industrial MCP Server positioned explicitly "at the edge"**, exposing data pipelines as *tools* to AI agents with descriptions and parameters — announced as the **first** industrial MCP server.
+- An **"AI Generate Instances"** function: an LLM walks an OPC UA address space, finds instances, **validated before saving**.
+- LLM-assisted contextualization with native connections to Bedrock, Azure OpenAI, Gemini, OpenAI **and local LLMs**.
+- **$17,500 → $18,500 per site per year** (Professional, single plant), MCP Services included in *all* licences, free 30-day trial.
+
+### What it invalidates
+
+`docs/mindset.md` **L589**: *"MindSet is the only edge MCP"* — **factually false since July 2025**. And **L1262-1263** (Moat #5) surveys Cognite / MaestroHub / UMH but never mentions HighByte, which had already shipped. Two of the four "why us" arguments in the first draft of the fundamentals doc were resting on this.
+
+Their local-LLM support also removes "the data never leaves your network" as an automatic differentiator. The sovereignty argument narrows — correctly — to **vendor jurisdiction** (HighByte is US; CLOUD Act exposure at the contractual level), which still holds decisively for FR public sector, defence and regulated pharma.
+
+### What survives, stated precisely
+
+Not nothing, but less than we thought, and only one item is verified:
+1. **Deterministic weighted scoring vs LLM generation** — ours is a traceable formula with named inputs and fixed weights; theirs is LLM-proposed. Not "better" in the abstract, but *auditable*, which is a real distinction where a node acceptance must be justified. **This is now our strongest remaining technical argument.**
+2. **European jurisdiction + no hyperscaler edition.**
+3. Deployment simplicity — **[À VALIDER]**, HighByte's real install complexity unknown.
+4. Native OT↔IT entity resolution — **[À VALIDER]**, not verified whether HighByte does it.
+
+Three of four are unverified. Written into the doc as such rather than smoothed over.
+
+### Consequence recorded in the doc
+
+> *"La phrase « personne ne fait ce qu'on fait » est morte. Elle doit être retirée de tous les supports."*
+
+The honest question is no longer *"are we the only ones?"* but *"why us rather than HighByte?"* — and the build-vs-buy answer changes shape with it: the comparison is now **three-way** (build / HighByte at $18.5k / UMH free open-source), and **our real competitor is not the customer's internal team, it's HighByte**. At $18.5k/year a market product costs less than one loaded month of a senior engineer, which settles build-vs-buy — *against build*, not against us.
+
+Reframed as genuinely good news on demand: a serious vendor built this, priced it, and sells it. The market is validated, and the category (Cybus, HighByte, Litmus, Soffico, UMH) is young and growing. Not a closed market — just not an empty one.
+
+### Deliverable and the contradiction it created
+
+`docs/solutions_build_buy_conseil_workshop_2026-09-01.md` — Q2/Q3/Q4 in depth, led by §0 carrying the finding, with named competitor detail (HighByte as the reference, UMH as price-floor pressure at zero, Litmus as the connector-coverage fight to avoid), a three-way build/buy table, seven guardrails, and a prioritised validation list whose top item is **installing HighByte's free trial and running "AI Generate Instances" against our own Prosys server** — same server, same tree, their mechanism against ours. Nothing substitutes for that.
+
+**This immediately created a contradiction**: Q2/Q3/Q4 existed in both documents, and the older versions still asserted differentiators that §0 disproves — two workshop docs actively contradicting each other, which is worse than duplication. `questions_fondamentales_workshop_2026-09-01.md` was therefore trimmed to Q1 only (25 321 → 12 331 chars), with a pointer explaining *why* the three moved, so nobody preps from the superseded version. Cross-doc references verified in both directions; one stale "§5" pointer left by the trim was caught and fixed.
+
+### Needs a decision — not done unilaterally
+
+`docs/mindset.md` L589 and L1262-1263 carry a now-false claim. Editing a documented **moat** is a founder-level call, not a doc-hygiene fix, so it is flagged rather than rewritten.
+
+### Still open
+
+The `docs/tarik.md` credential block — flagged eight times, no decision.
+
+---
+
+## Entry 173 — 2026-09-01 — LinkedIn outreach plan to validate the hypotheses; the contact list was mislabelled for the piste that now matters
+
+Mohamed: reach out on LinkedIn to validate the ideas against the real world. **Deliverable:** `docs/outreach_validation_2026-09-01.md` — ready to execute, nothing sent.
+
+### The central question changed on 01/09
+
+Before the HighByte finding, outreach would have asked *"does this problem exist?"*. It doesn't need asking — the problem is documented and a vendor sells a $18.5k/site/yr product against it. The question that now decides whether the offer has a place is:
+
+> **"Why haven't the people who have this problem solved it with the products that already exist?"**
+
+That reframing drives the whole plan. **H2 — do they know HighByte / Litmus / UMH, did they evaluate, why rejected — is now the single most decisive question in the outreach**, and it did not exist as a question two days ago.
+
+### The contact list was labelled for the wrong piste
+
+The 13 contacts were researched in August for the robotics thread. Re-reading their titles against the priorities: **three "Track B AMR client" contacts are actually ideal OT/IT validators.** Sami Aloui, Emmanuel Lebreton and Bastien Charrier hold *Responsable Automatisme **et Informatique Industrielle*** — the OT/IT junction in one person, and literally the "factory techs" named in the original request. Khalil Mosrati spans both.
+
+So the highest-value contacts for the priority piste were already in the file, filed under the wrong heading. Re-segmented: **A** = automation/industrial-IT managers (H1, H2, H3) · **B** = CTO/DSI (H2, H3, and **H4 budget** — the only question they can settle) · **C** = AMR vendors (H5) · **D** = Arnaud Lubespere, dual thread.
+
+### Practical constraint that shapes the artifact
+
+**LinkedIn connection notes cap at 300 characters**, and all 13 contacts are 2nd-degree — so the first touch *is* that note. Hence a two-stage format throughout: short invitation note, then the real diagnostic message once accepted.
+
+**Verified rather than assumed: the Segment A note came out at 301 characters and would have been truncated on send.** Caught by counting programmatically, shortened to 279. All five notes now measured ≤300 (279 / 294 / 251 / 238 / 279), including an English variant for Lukasz Tomaszewski (Birmingham).
+
+### Discipline carried through
+
+Posture stays diagnostic per Geneviève's framing — no platform description in a first message. Guardrails include two that are specific to this moment: never write *"we're the only ones"* (false since 01/09, and a technician who knows HighByte would catch it), and never ask *"do you have this problem?"* — a closed question that invites "no". Always ask for a story: *"tell me about the last time…"*.
+
+**Pacing written in explicitly**: send 4-6 invitations, wait, adjust. Not all 13 at once — the first replies will likely show the question is badly framed, and sending everything burns the list before that lesson lands.
+
+Also recorded: the answers that would hurt. If H2 comes back *"we know them, we evaluated, we bought"*, the room on this piste shrinks sharply. If H1 comes back *"no, the hard part was the network"*, the entire positioning needs revisiting. Written down before sending, so the result can't be reinterpreted afterwards.
+
+### Also done this turn
+
+Scope banners added to both fundamentals docs — neither previously stated it covers **only the OT/IT piste**, though the four questions have different answers per piste and entirely different competitive landscapes (HighByte/Litmus/UMH vs Resilinc/Interos vs almost nobody).
+
+### Blocked
+
+`Matrice de décision` sheet 2's OT/IT row still needs the HighByte correction — it reads *"Aucun verrou"* and recommends the piste as PRIORITAIRE on reasoning written before the finding. The xlsx was open in Excel; write failed with a lock. Pending.
+
+### Still open
+
+`docs/tarik.md` credential block — nine flags, no decision.
+
+---
+
+## Entry 174 — 2026-09-01 — Matrix and plan brought in line with the HighByte finding; the recommendation survives but its reasoning changed
+
+Closing the item blocked twice by an Excel file lock. `docs/plan_tech_workshop_2026-08-28.xlsx` now carries the 01/09 competitive finding in both sheets.
+
+### The OT/IT row was recommending the priority piste on reasoning that had been falsified
+
+`Matrice de décision` row 2 read *"Aucun verrou"* and *"PRIORITAIRE — seule piste implémentée…"*, written before HighByte was known. Four cells rewritten:
+
+- **Ce qui manque** — now names HighByte Intelligence Hub 4.2 (July 2025): embedded edge MCP server, LLM-driven instance generation from an OPC UA address space with validation before saving, $18,500/site/yr; and states plainly that `mindset.md` L589 is false.
+- **VERROU** — split into two, because conflating them was the error: *no technical lock* (still true — what's missing is identified work, not unknowns) but a **new competitive lock**. Remaining differentiators listed with their verification status: deterministic auditable scoring and EU jurisdiction (verified); deployment simplicity and OT/IT entity resolution (**à vérifier**).
+- **Prochaine action** — priority 1 is installing HighByte's free 30-day trial and running "AI Generate Instances" against our own Prosys server, same tree, their mechanism against ours. Priority 2 is the validation outreach.
+- **Recommandation** — **still PRIORITAIRE, but for a revised reason**, and the revision is the point: no longer *"the only piste nobody else does"* (false) but *"the only piste that is implemented, verifiable, and advances without a third party's cooperation."* Adds the line that reframes build-vs-buy: at $18.5k/yr a market product costs less than one loaded month of a senior engineer, which settles the question **against build — not against us**. The real competitor is HighByte, not the customer's internal team.
+- **Critère d'abandon** — added where there was none: if the head-to-head shows no defensible advantage *and* outreach shows ETI/PME already know and buy these products, the position narrows to EU jurisdiction alone.
+
+### Sheet 1 needed a subtler fix
+
+Topic 1 lists *"MCP pour agents IA"* among what's built. That is true and stays — it is not a uniqueness claim. But the row had **no vigilance note at all**, and presenting "we have MCP for AI agents" as a highlight invites exactly the HighByte question from anyone informed. Added: say it is built and verified without reservation, never present it as unique, and use *"c'est construit et vérifié chez nous"* rather than *"personne d'autre ne l'a"*.
+
+### Verification note worth keeping
+
+A regex sweep for uncorrected uniqueness claims flagged three cells — all three were **my own corrective text** matching on the quoted phrase inside *"…est fausse"*. Confirmed by re-reading each in context rather than trusting the sweep. A grep for a bad claim also matches the sentence that retracts it; the check has to read the surrounding words.
+
+### State
+
+Both sheets coherent with the finding, no empty cells, other four pistes untouched. The correction is now carried in four places — the two Q2-Q4 docs, the matrix, and the presentation plan — so it cannot be missed by reading only one artifact.
+
+**`docs/mindset.md` L589 and L1262-1263 remain uncorrected by design** — editing a documented moat is a founder decision, flagged not executed.
+
+### Still open
+
+`docs/tarik.md` credential block — ten flags, no decision.
+
+---
+
+## Entry 175 — 2026-09-01 — LinkedIn prospected live: 55 profiles, and a network asset nobody had noticed
+
+Mohamed asked me to go through his LinkedIn and build a large reachout list. Done live in the browser across six targeted searches. **Deliverable:** `docs/prospects_linkedin_2026-09-01.xlsx` — 55 profiles, segmented, prioritised, every row with a working profile link, filterable.
+
+### Segments and what each validates
+
+| Segment | N | Validates |
+|---|---|---|
+| **A2 — Architectes OT/IT** | 16 | H1 (semantics vs protocol) at the sharpest technical level |
+| **A1 — Resp. Automatisme & Informatique Industrielle** | 26 | H1, H2, H3 — the "factory techs" originally asked for |
+| **B — Direction industrielle / DSI** | 10 | **H4 (budget)** — the only people who can answer it |
+| **C — UNS / catégorie** | 3 | **H2 directly** — they have already evaluated this category |
+
+### The finds that matter
+
+- **Two contacts are already 1st-degree** — Boudjemaa Abdelhadi TELLI (Automatisme & Informatique Industrielle, MES/SCADA) and Randy LENDOYE (Industrial IT | PLC | SCADA | MES | ERP). **No invitation needed, direct message, zero cost.** These should be contacted before anything else and nobody had spotted them.
+- **Richard DELEYE** — *Group Operational Technology (OT) Manager | OT Architecture | IT/OT Convergence*, France. The single closest profile to our subject found anywhere.
+- **Arthur Toreau** — *Responsable Informatique Usine & Référent Cybersécurité Industrielle | Architecte OT/IT | SCADA • MES*. Lives H1 and H3 daily, and the industrial-cyber angle intersects the ISO 10218 cyber point.
+- **Frederic Baum** — *Architecte IT/OT | **Data Platform Industrielle** | OPC UA*. That phrase is our category, in a French profile — he will know whether HighByte/Litmus are known here (H2).
+- **Alexis ROUJOL** — *Directeur Industriel **- CTO***, with Khalil Mosrati as a mutual. The rare profile that can answer both the budget question and the technical one.
+- **Florian Schwarzt** — *IT Project Manager @ Siemens Energy, **100+ factory IIoT rollout**, UNS*. Has done at scale precisely what we theorise about. Arguably the highest-information single conversation available.
+
+### The network asset nobody had noticed
+
+Several UNS-segment profiles share two mutual connections: **Walker Reynolds** (the most prominent UNS evangelist in the industry) and **Kudzai Manditereza**. Kudzai is, to my recollection, Developer Advocate at **HighByte** — the competitor discovered in Entry 172 — which would mean a warm path to the vendor whose product now defines our competitive answer.
+
+**Flagged, not asserted**: I did not verify Kudzai's current employer during this session. It must be checked before being used, and it is exactly the class of claim this project has repeatedly required proof for.
+
+### Method note
+
+LinkedIn's DOM uses obfuscated class names, so extraction anchors on `a[href*="/in/"]` and climbs to the largest sensible text container. Two things went wrong and were worked around rather than papered over: mutual-connection links were initially captured as if they were result cards (fixed by requiring ≥2 text lines in the anchor's own text), and a `sessionStorage` accumulator to survive pagination silently failed — LinkedIn appears to clear it on load — so a compact name+slug pass was used to recover every URL lost to output truncation. Per the browser guidance, the accumulator was abandoned after two attempts rather than retried further.
+
+Roughly a dozen profiles have titles that were truncated before capture. Each is marked *"Titre non capturé — à vérifier"* rather than left blank as if complete. One deserves specific care: a **Tariq MSADEK** appears in the automation search — the note warns it is probably **not** the Tariq of `tarik.md` and must be checked before any contact, since confusing them would be a real embarrassment.
+
+### How this fits the existing plan
+
+`outreach_validation_2026-09-01.md` already holds the posture, the segment message templates (all verified ≤300 characters) and the sequencing. This list feeds it: Segment A2/A1 take the Segment A message, Segment B takes the CTO/DSI message, Segment C needs a new one — those are peers and category experts, not prospects, and must be approached as *"challenge my analysis"*, never as a sale.
+
+Nothing sent. Browser tab closed.
+
+### Still open
+
+`docs/tarik.md` credential block — eleven flags, no decision.
+
+---
+
+## Entry 176 — 2026-09-01 — The scaling/productisation questions: Mohamed's integrator observation is confirmed by the vendors' own words, and it reframes the whole offer
+
+Five questions added, and they are sharper than Q1-Q4. Those asked *why the problem exists*; these ask **why nobody has productised it, and what it would take technically**. **Deliverable:** `docs/scalabilite_productisation_workshop_2026-09-01.md`.
+
+### The observation was right, and the evidence is stronger than the intuition
+
+Mohamed: *"HighByte, Litmus et les autres ont déjà tenté de produitiser cette couche… ils passent quand même massivement par des intégrateurs. Ce n'est pas un hasard."*
+
+**Verified.** HighByte takes its Industrial Data Fabric to market through global SIs — **Deloitte, Infosys, Cyient, TensorIoT** — and that role is described publicly, in the ecosystem's own words, as **"the last mile between concept and reality."** Plus a distributor/channel-partner network by geography and use case, and a new Siemens partnership. Litmus goes through GFT.
+
+An established vendor with a built, priced, years-old product **still needs a human on site for the final segment**. That is not a flaw in their product — it is the current frontier of productisation in this category, and it is the right thing for the workshop to attack.
+
+### Q5 — the scaling answer, expressed as an equation
+
+The layers split cleanly: transport is generic and solved; storage/transformation/governance is generic and solved; **the semantic commitment specific to a site is not generic and is handed to the integrator**; site business logic (what counts as a stop, which line is the bottleneck) probably never fully generalises.
+
+Formulated so it is testable rather than rhetorical:
+
+> Today human effort is proportional to **tag count — O(n)** (10k-100k tags, modelling = 40-60% of UNS effort). To scale, effort must become proportional to **genuinely ambiguous items — O(u), u ≪ n**.
+
+Second cause, usually forgotten: **a perfect model still rots.** Without drift detection the integrator must return, which is precisely what converts a product into recurring services.
+
+### Q6 — the productisation answer, and the one asymmetry that actually holds
+
+The reframe: **you cannot standardise the content — every site really is different — but you can standardise the process of converging on the content.** Five mechanisms, ordered by how much effort each removes: auto-derivation from discovery (kills the blank page) · **confidence scoring per node (the actual O(n)→O(u) lever)** · capturing corrections as labelled data instead of losing them in a consultant's head · drift detection (project → product) · **cross-site priors**.
+
+Cross-site priors are the argument of substance: naming conventions differ per site but are **not random** — they cluster by sector, by vendor stack (a Siemens site does not name like a Rockwell site) and by whoever wired the plant. Those regularities are learnable, so marginal effort per site falls as the install base grows, **while an integrator restarts from zero every engagement**.
+
+> *"Ce n'est pas « on est plus rapides » — c'est « on s'améliore, eux se répètent »."*
+
+Privacy is already solved by an existing decision: share **aggregated priors, never customer data** — the same IMDS mechanism adopted for supply chain in `tarik.md`.
+
+**Two honest limits written in.** Site business logic is irreducible; the defensible goal is shrinking the last mile from months to days, not to zero — and if that works the integrator becomes a **channel** doing five times more sites, consistent with Q4. And the whole O(n)→O(u) argument **depends on the confidence score being calibrated**; an uncalibrated score is silently auto-accepted noise, worse than no automation. That is now the cheapest and highest-priority test we have.
+
+### Q7 / Q9 — the two answers most likely to be needed live
+
+**Agents:** transport is solved (MCP, which HighByte also embeds); **content is not**. Five specific gaps, each mapped to a question the agent cannot otherwise answer: semantics · entity resolution across OT/MES/ERP naming · topology and causality · temporal alignment · provenance. The sharp point: an agent without context is not useless but **dangerous** — confidently wrong about a factory. *"MCP a réglé comment un agent se branche. Personne n'a réglé sur quoi il se branche."*
+
+**Data lake** — flagged as the most dangerous objection because it usually comes from whoever signed the cheque. Documented industry language: lakes degenerate into **"data swamps"** where terabytes sit unused because nobody knows what they mean, and *"a PLC tag named `4001:Val` gives no insight; without metadata (Asset, Shift, Product), data is noise."* The economic argument: **in a lake the cost of reconstructing context is paid by every consumer every time; a context layer pays it once.** Positioning deliberately non-frontal — *upstream of the lake, not a competitor to it*.
+
+And the reframe on "toute data est un asset": **raw data is a liability** — storage, compliance surface, security surface, zero value uninterpreted. The asset is the decision. Which lands on the measurable claim: decision latency = t_detect + **t_understand** + t_decide + t_act, where t_understand dominates and is human today. We attack exactly one term — the dominant one — and it is measurable before/after on a pilot, satisfying Jalil's KPI rule without asking anyone to take our word.
+
+### Seven guardrails
+
+Including three that are new and specifically self-limiting: never claim the confidence score solves it *until calibration is measured*; never present cross-site priors as an acquired network effect (**untested — no second site exists**); never say "we remove the integrator" — it is false and closes the best distribution channel.
+
+### Still open
+
+`docs/tarik.md` credential block — twelve flags, no decision.
+
+---
+
+## Entry 177 — 2026-09-01 — Consolidation: one document per subject, 9 workshop artifacts down to 6
+
+Mohamed: assemble the docs of a single subject into one document. Applied across the whole workshop set.
+
+### Questions: 3 documents → 1
+
+`questions_fondamentales` (Q1) + `solutions_build_buy_conseil` (Q2-Q4) + `scalabilite_productisation` (Q5-Q9) merged into **`docs/questions_workshop_2026-09-01.md`**, structured so the reading order matches the argument:
+
+- **§0 — the two findings that change the answers**, promoted to the front because they modify several: **A.** HighByte shipped edge MCP + LLM instance generation before us (invalidates `mindset.md` L589); **B.** the vendors go through integrators anyway, and the ecosystem itself calls that role *"the last mile."*
+- **Partie I** — the problem (Q1) · **Partie II** — landscape and competitive defence (Q2-Q4) · **Partie III** — scalability and productisation (Q5-Q9).
+- Validation items, **16 consolidated guardrails** grouped by theme, and **28 deduplicated sources**.
+
+Built by **slicing the existing sections programmatically rather than retyping**, so no content could drift in transcription. Verified against 28 distinctive markers spanning all three sources — `40 à 60`, `AI Generate Instances`, `Deloitte, Infosys, Cyient`, `last mile between concept`, `4001:Val`, `O(u)`, `t_comprendre`, `data swamp`, `IMDS` — **zero missing**, Q1 through Q9 all present. 53 876 → 49 697 chars; the reduction is exactly the three duplicated headers, guardrail blocks and source lists.
+
+Cross-references that became internal were rewritten (`solutions_build_buy... §0` → `§0.A de ce document`), and the external pointer in `outreach_validation` was repointed. Repo-wide grep confirms no orphan reference outside the log's historical entries.
+
+### Contacts: 2 files → 1
+
+`contacts_workshop_2026-08-27.xlsx` (13, robotics-era) + `prospects_linkedin_2026-09-01.xlsx` (55, prospected live) merged into **`docs/prospects_workshop_2026-09-01.xlsx`** — 68 rows, unified 11-column schema, deduplicated by LinkedIn slug, sorted by priority, every row with a working link, filterable.
+
+Dedup found **zero collisions**, which is the expected result rather than a suspicious one: when building the prospect list I had deliberately excluded people already in the contacts file. Verified explicitly that Emmanuel Lebreton — the one person who surfaced in both a search and the old list — appears exactly once. A `Source` column records whether a contact came from 27/08, 01/09, or both, so the provenance survives the merge.
+
+### Result
+
+| Sujet | Artefact |
+|---|---|
+| La séance elle-même | `workshop.md` |
+| Questions de fond (Q1-Q9) | `questions_workshop_2026-09-01.md` |
+| Robotique | `robotique_etat_art_workshop_2026-08-31.md` |
+| Plan de présentation + matrice | `plan_tech_workshop_2026-08-28.xlsx` |
+| Prospects & contacts | `prospects_workshop_2026-09-01.xlsx` |
+| Outreach (posture, messages, séquencement) | `outreach_validation_2026-09-01.md` |
+
+Supply chain remains in `tarik.md`, which was already the single doc for that subject.
+
+Nine artifacts down to six, one subject each, no overlap and no orphan references. Every deletion verified against the merged file first — the same discipline applied when `robotique_analyse` was absorbed in Entry 167.
+
+### Still open
+
+`docs/tarik.md` credential block — thirteen flags, no decision.
+
+---
+
+## Entry 178 — 2026-09-01 — Mohamed challenged the sourcing behind Q6; the check strengthened the claim and killed the causal shortcut
+
+Mohamed asked directly whether I had visited the vendors' sites or where the integrator evidence came from. **Honest answer: I had not.** Entry 176 was built from **web-search snippets**, never from the pages themselves — no partner page, no case study, no evidence of what integrators actually deliver. The writing carried more confidence than the sourcing justified. Went and checked properly.
+
+### What the real check produced
+
+**Stronger than before, from a source I had not used:** the **CSIA** — Control System Integrators Association, the integrators' own trade body, independent of any vendor — describes UNS deployment work by claiming the semantic layer as its profession: *"Normalizing inconsistent data from various machine vendors"*; *"Successful UNS deployments require publishing **meaningful, contextualized** data... **not just raw tags**"*; *"**We know how ISA-95 models connect to real plant hierarchies and how to create naming and data structures that mirror actual production environments.**"* A professional association describing its own trade is far better evidence than a vendor's channel page.
+
+**Confirmed at source:** the "last mile between concept and reality" quote is real and is HighByte's own wording about Deloitte/Infosys/Cyient/TensorIoT. Their partner page assigns integrators "design and deployment", consulting and integration.
+
+**New weak signal, consistent:** HighByte's careers page showed **one open role on 01/09 — an Account Executive**. No implementation engineer, no solution architect, no professional services. A vendor intending to absorb the last mile would hire for it; this one hires to sell. Logged with its caveat (snapshot, small company, unlisted hiring possible).
+
+### The counter-example that had to go in
+
+**UMH claims the opposite**: 90 seconds to connect a machine, 18 minutes with templates, "<5 days from idea to live use case", a console "accessible to OT engineers without writing code", and **no mention of integrators or professional services at all**.
+
+What survives — and it is a real distinction, not a rescue: **those numbers measure connection time, not semantic modelling time.** Connecting a machine in 90 seconds says nothing about agreeing what its tags mean. UMH quantifies neither standards definition, nor mapping the existing landscape, nor multi-site change management — and does quote **4-6 weeks** for a multi-machine production pilot.
+
+### The correction that matters most
+
+The document previously implied **causation**: they use integrators *because* the last mile resists standardisation. That inference does not hold. Enterprise software sells through channel partners for reach, language, existing customer relationships and risk transfer — Salesforce and SAP go through Deloitte without anyone concluding their products are unfinished. **Integrator use is consistent with the hypothesis; it does not establish it.**
+
+§0.B now separates the two explicitly:
+- ✅ **Established** — the semantic layer is billed human work, claimed as such by the integrators themselves.
+- ⚠️ **Not established** — that it is irreducible.
+
+With the line to use in the room: *« la couche sémantique est du travail humain facturé, c'est établi. Que ce soit irréductible, ça reste à démontrer — et c'est précisément ce qu'on propose d'attaquer. »*
+
+Three guardrails added: never treat the integrator channel as proof of irreducibility; never ignore UMH when describing implementation effort; distinguish connection time from semantic modelling time.
+
+### Method note worth keeping
+
+Search snippets read as if they were sources. They are summaries, and they carry no indication of what the underlying page does **not** say — which is exactly where UMH's counter-evidence was hiding. **Snippets are a pointer to a source, never the source.** Same class of error as the `[À VALIDER]` on HighByte in Entry 172, and it took the user asking to surface it.
+
+### Still open
+
+`docs/tarik.md` credential block — fourteen flags, no decision.
+
+---
+
+## Entry 179 — 2026-09-02 — Two corrections: the convergence is the JOIN not the tags, and a feasibility verdict with a concrete calibration protocol
+
+Mohamed pushed twice, and both pushes landed.
+
+### First correction — I had reduced OT/IT convergence to tag mapping
+
+*« pourquoi tu parles que du tags et tu parles pas de ot/it ou aller loin ? »* Correct, and it was a real defect in Q6 and in the draft reply to Cécilia. Cécilia's question was explicitly about **la convergence OT/IT**; the answer given was about OT semantic mapping — half the problem, and its most superficial layer.
+
+**Five layers now stated explicitly, with only one of them actually being convergence:**
+
+| Couche | Nature |
+|---|---|
+| 1. Structure OT (tags → équipement → hiérarchie) | **OT pur** — pas de la convergence |
+| 2. Structure IT (tables ERP/MES → objets canoniques) | **IT pur** — pas de la convergence |
+| **3. Jonction OT↔IT** (`Machine1` = `machine1` = `M-001`) | **C'est ça, la convergence** |
+| 4. Alignement temporel (événement OT seconde vs saisie ERP fin de poste) | Convergence |
+| 5. Sémantique métier | Irréductible, humain |
+
+**Why layer 3 is the real subject:** it is what produces business meaning. Without it a stop is a stop; with it it is *a stop on order 4412, product X, customer Y, delivery in 3 days* — which is exactly the `t_comprendre` term from Q9.
+
+**And the scaling argument is stronger there, not weaker:** layer 1 is **O(n)** tags to qualify; layer 3 is **O(n_OT × n_IT)** in the worst case — combinatorially worse. So the confidence gate is a convenience at layer 1 and a **necessity** at layer 3. Cross-site priors are stronger there too: what repeats across sites is not the names but the **patterns of divergence** between OT and ERP naming.
+
+**And the honest limit moves with it.** Entity resolution today is **exact normalised matching** — so it works when names resemble each other and **fails completely when they don't**, which is the common real-plant case. *That* is the last layer of specificity, not tag mapping, and it is where the integrator still wins. Two guardrails added (15bis, 15ter).
+
+### Second — "is this even feasible?"
+
+Assessed mechanism by mechanism rather than answered with enthusiasm. **Four of five are buildable in 6-8 weeks by one engineer**; entity resolution is a mature field (Fellegi-Sunter 1969; Splink/Zingg today). The fifth — cross-site priors — is technically feasible but blocked on having **zero second site** and a cold-start problem; not demonstrable before 5-10 sites.
+
+**The mechanism worth building is not the obvious one.** Name-based matching (Levenshtein, tokens, hierarchy position) plateaus fast: when `M-001` and `Ligne2_Four` share no characters, no string similarity saves you. **Behavioural correlation does** — OT gives Run/Stop transitions timestamped to the second, IT gives order-quantity progress on a work centre; if they correlate, it is the same machine, **independent of any name**. Structurally defensible because it requires holding OT time-series *and* IT transactional data in one system *over time* — a configuration-time mapping tool cannot do it by construction. Two accuracy notes recorded: global assignment (Hungarian) over greedy pairwise, and cardinality constraints.
+
+**Calibration protocol written to be executable, not aspirational** — data (Prosys + `fake_erp`, ground truth known on both sides, so no customer needed), procedure, four measures (reliability diagram, ECE, precision at `AutoAcceptThreshold`, human-review rate `u/n`), and **explicit pass criteria**: precision at threshold ≥ 0.95, |score − accuracy| ≤ 0.10 per bin, `u/n` ≤ 20%. Failure is framed as informative rather than fatal — but it must be known **before** the workshop.
+
+**Risk recorded that cuts against us:** HighByte's LLM approach is not naive. An LLM given tag names and ERP column values may do fuzzy matching well without any of this machinery. "Deterministic and auditable" only holds if accuracy is **at least comparable** — untested.
+
+> **Le risque n'est pas technique. On sait construire ça.** Ce qu'on ne sait pas, c'est si quelqu'un l'achète, et si on le fait mieux que celui qui vend déjà à 18 500 $/site — et aucune de ces deux réponses ne s'obtient en codant.
+
+### Outreach realigned so the contacts test the new ideas
+
+Three hypotheses added — **H6** (the join, not the tags, is the hard part), **H7** (OT and ERP names don't match in practice, so exact matching is inoperative and someone reconciles by hand), **H8** (would automatic matching be trusted, or must a human validate every link) — and the Segment A follow-up message now leads with the question that tests them:
+
+> *« Chez vous, une machine porte-t-elle le même nom dans l'automate et dans l'ERP ? Si non — qui fait le rapprochement aujourd'hui, et comment ? C'est un fichier Excel, la tête de quelqu'un, ou c'est codé en dur quelque part ? »*
+
+`prospects_workshop_2026-09-01.xlsx` gained a **"Valide quelles hypothèses"** column mapping each of the 68 contacts to what they can actually answer. Coverage: H2 58 contacts · H3 55 · H1 49 · **H6 45 · H7 42 · H8 26** · H4 13 · H5 10. Every row mapped, none blank — so the new hypotheses are testable against the existing list without further prospecting, and H4 (budget) is visibly the thinnest at 13 contacts.
+
+### Still open
+
+`docs/tarik.md` credential block — fifteen flags, no decision.
+
+---
+
+## Entry 180 — 2026-09-02 — Post-connection messages written for all 68 contacts, under a constraint that changes the message design
+
+Mohamed: LinkedIn invitation credits are exhausted, so **no note can be attached to the invite**. The contact accepts with zero context, and the first message must carry everything. Objective stated: get to the field, validate the ideas, maximise the odds of landing a call, and open the door to a first POC during it.
+
+### What the constraint changes
+
+Every message now **introduces itself** — *« je n'ai pas pu joindre de mot à l'invitation, donc je me présente »* — which is honest about the situation rather than pretending a prior exchange. Without that opener, a cold message after a note-less invite reads as spam.
+
+### Four registers, not one template
+
+- **OT/IT terrain (42)** — leads with the H6/H7 question, the most concrete one on the list: *« chez vous, une machine porte-t-elle le même nom dans l'automate et dans l'ERP ? Si non, qui fait le rapprochement — un fichier Excel, la tête de quelqu'un, ou c'est codé en dur ? »* Answerable in one line, which is exactly why it should get replies.
+- **Direction industrielle / DSI / CTO (13)** — different question entirely, because they will not answer a naming question: where projects stall (technique / budget / ownership between IT and production), then the **18 k€/site/an** figure and whether it is provisioned or unthinkable. This is the only segment that can settle H4.
+- **UNS international (3)** — in English, peer register: *"I'd rather have my assumptions challenged by someone who has done this at scale."* Explicitly not a sale — these are people ahead of us.
+- **Robotique (10)** — the reformulated live-machine-state question from Entry 166.
+
+Personalisation is drawn from the sheet rather than generic: the opener adapts to the person's actual title (architect, SCADA/MES, industrial cyber), company where known, and **13 messages name a mutual connection**, which is the strongest single lever for a reply.
+
+### The POC door, opened without pushing
+
+55 messages end on *« j'ai un prototype qui tourne, je peux vous le montrer en direct pendant l'échange »*. Deliberately framed as making the conversation concrete and as a request for their technical feedback — **not** as a demo pitch. For engineers this is usually the line that converts a "maybe" into a call, and it sets up a first POC naturally rather than asking for one cold. Withheld from the direction/DSI segment, where it would read as selling and undercut the "I'm not here to sell you anything" framing.
+
+### Two defects caught by reading the output rather than trusting the generator
+
+1. **All 68 messages contained markdown `**` emphasis. LinkedIn renders plain text** — every one would have displayed literal asterisks and looked amateurish. Stripped, including the italics in the English variant. Structure now carries the emphasis via line breaks alone.
+2. The direction-segment opener read *"Votre poste fait de vous…"* — flat, and empty of information whenever the company field was blank. Now injects the real title (*"Votre poste de Directeur Industriel fait de vous…"*).
+
+Both were only visible by printing finished messages and reading them as a recipient would. The generator reported success on the first run.
+
+### State
+
+68 messages, none empty, all signed, 861-1427 characters (long enough to carry the question, short enough to be read). Column added to `prospects_workshop_2026-09-01.xlsx`, which now holds 13 columns: identity, segment, priority, which hypotheses the person can validate, and the ready-to-send message.
+
+Nothing sent.
+
+### Still open
+
+`docs/tarik.md` credential block — sixteen flags, no decision.

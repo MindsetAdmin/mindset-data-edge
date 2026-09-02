@@ -44,3 +44,19 @@ Construit sur la guidance déjà obtenue de Geneviève (`docs/call_oss_venture.m
 ## G. Clôture
 
 - Qu'est-ce qui vous ferait dire "on teste" plutôt que "on verra plus tard" ?
+
+---
+
+## Noms identifiés pour ces questions (2026-08-27)
+
+Recherche LinkedIn ciblée — cette liste n'existait pas avant, les questions ci-dessus n'avaient aucun contact attaché.
+
+| Nom | Rôle | Localisation | Pourquoi |
+|---|---|---|---|
+| **Stéphane Jaud** | CTO — Directeur Technique & Innovation chez **VLAD** | Tours | Titre exact "CTO," profil industriel — le meilleur match direct pour ces questions |
+| **Frédéric Kieffer** | DSI en ETI, PME et Association, orienté métier / CTO / Directeur de Projets / Stratégie IT / Transformation digitale / Dette technique / Data Intelligence | Paris | Langage quasi identique au ciblage ETI/PME du produit — "orienté métier" recoupe directement l'angle Geneviève (pas d'IT pour l'IT) |
+| **Christophe Fournel** | Expert Data & Digital Transformation, accompagnement stratégique CDO/CIO/CMO et Dirigeants PME/ETI, 25 ans en architecture de données/ETL | Paris | Profil conseil plutôt qu'opérationnel — utile pour challenger l'architecture plutôt que pour un pilote direct |
+
+**Non retenus** : plusieurs profils "CTO" trouvés dans la même recherche (Jean-Yves Cambier, Ludovic Coralie, Loic Caroli) sont positionnés sur du conseil/IA générique ou de l'infogérance IT pure — pas assez spécifiquement industriel/OT pour ces questions précises.
+
+**Rien envoyé** — même posture que le reste des recherches de contacts (voir `robotique_etat_art_workshop_2026-08-31.md` §16).
