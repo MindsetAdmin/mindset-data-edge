@@ -10147,3 +10147,37 @@ Four of the six share **MAZELIN Hervé** as a mutual connection — a cluster wo
 ### Still open
 
 `docs/tarik.md` credential — twenty-six flags.
+
+---
+
+## Entry 191 — 2026-09-03 — Q10 added: are we replacing integrators or arming them, and the trap that answer hides
+
+Mohamed asked the question directly: *« notre rôle c'est de remplacer des intégrateurs ou on est l'outil des integrateurs ? »* Q4 already said *« canal, pas concurrent »* and *« ce que le consultant installe »* — correct as far as it goes, but it **sidesteps the conflict rather than resolving it**. Added as **Q10**, and the doc is now "Les 10 questions fondamentales".
+
+### The tension Q4 was avoiding
+
+> Our value proposition is to cut effort by 40-60%. That is, to cut **exactly what the integrator bills**.
+
+No clever phrasing dissolves that. What resolves it is the counterparty's business model, so the doc now states it as a table: an integrator selling **hours** sees a direct threat; one selling **fixed-price projects** sees margin; one **constrained by hiring** sees a multiplier.
+
+The third is the real market — industrial integration in France is limited by engineer supply, not demand. An integrator delivering 5 sites a year instead of 2 with the same team earns more, not less. **Which makes partner targeting a decision rather than an execution detail**: there is a category we cannot sell to without asking them to cut their own revenue.
+
+Pitch recorded for that audience: *« les 40-60 % que vous passez à modéliser, ce n'est pas ce pour quoi votre client vous garde. C'est ce qu'il tolère. »*
+
+### The structural trap, which appears nowhere else in the docs
+
+> **The cross-site priors mechanism (§Q6.5) — the one thing an integrator structurally cannot replicate — requires that corrections made at site A flow back to improve site B.**
+>
+> If the integrator deploys on-premise at their client and we never see anything, **the priors never accumulate.** We become a component supplier with no compounding effect, and the advantage we claim disappears.
+
+So direct-versus-channel is not only a distribution question: **it determines whether our principal technical advantage can exist at all.** The escape is already designed elsewhere — return aggregated patterns, never customer data, the IMDS mechanism from `tarik.md` — but that becomes **a clause to negotiate in every partner contract**, not a technical given. Flagged to be handled at the first integrator agreement rather than discovered later.
+
+### Left as a question, not a decision
+
+The answer depends on something undeducible from a desk: whether an integrator reads this tool as capacity leverage or as an attack on their trade. **Three people on the list can say**, and two already have the message — Lyes Malek (Ignition integrator, list 2), Robin Jacot (SPIE, already asked what share of a project goes into mapping), Yanis Brahiti (Capgemini Engineering, already asked whether the layer is productisable).
+
+Two guardrails added (17, 18): never claim "we help integrators" without checking what they sell, and never assume the channel model is technically neutral.
+
+### Still open
+
+`docs/tarik.md` credential — twenty-seven flags.

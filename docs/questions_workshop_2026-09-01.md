@@ -1,4 +1,4 @@
-# Les 9 questions fondamentales — préparation workshop (2026-09-01)
+# Les 10 questions fondamentales — préparation workshop (2026-09-01)
 
 Document unique regroupant **toutes les questions de fond** du workshop. Remplace et consolide `questions_fondamentales`, `solutions_build_buy_conseil` et `scalabilite_productisation` (supprimés — intégralité du contenu reprise ici).
 
@@ -15,6 +15,7 @@ Ce ne sont pas des questions de pitch : ce sont celles qu'un CTO ou un responsab
 | **Q7** | Que manque-t-il aux agents IA ? | III |
 | **Q8** | Que manque-t-il aux robots ? | III |
 | **Q9** | Ils ont un data lake — pourquoi nous ? | III |
+| **Q10** | On remplace les intégrateurs, ou on est leur outil ? | III |
 
 **Format** : **Niveau 1** = la réponse courte, à voix haute. **Niveau 2** = la substance technique et les chiffres, si on est challengé.
 
@@ -539,6 +540,54 @@ Latence de décision = **t_détecter + t_comprendre + t_décider + t_agir**
 ---
 
 ---
+
+## Q10. Notre rôle : on remplace les intégrateurs, ou on est leur outil ?
+
+**Niveau 1** — **Leur outil, mais on change leur métier.** On ne peut pas faire autrement : HighByte est financé, établi, et passe quand même par Deloitte, Infosys, Cyient et TensorIoT (§0.B). Si un éditeur installé ne déploie pas seul, nous encore moins. Et une partie du travail reste irréductiblement humaine (couche 5, §Q6) : la sémantique métier propre au site. On leur retire les 40-60 % fastidieux, on leur laisse le jugement.
+
+**Niveau 2** —
+
+### La tension qu'il ne faut pas esquiver
+
+Q4 conclut *« canal, pas concurrent »* et *« ce que le consultant installe »* plutôt que *« au lieu d'un consultant »*. C'est juste, mais ça contourne le problème au lieu de le traiter :
+
+> **Notre proposition de valeur est de réduire l'effort de 40 à 60 %. C'est-à-dire de réduire exactement ce que l'intégrateur facture.**
+
+Aucune formulation habile ne fait disparaître ça. Ce qui le résout, c'est le modèle économique de celui qu'on a en face :
+
+| Ce que l'intégrateur vend | Notre outil est pour lui |
+|---|---|
+| Des **heures** (régie) | Une menace directe sur son chiffre |
+| Des **projets au forfait** | De la marge supplémentaire |
+| Il est **limité par sa capacité** (ne recrute pas assez d'ingénieurs) | Un multiplicateur |
+
+**Le troisième cas est le marché réel.** L'intégration industrielle est contrainte par la pénurie d'ingénieurs, pas par la demande. Un intégrateur qui livre 5 sites par an au lieu de 2 avec la même équipe gagne plus, pas moins. C'est aussi la seule catégorie à qui on peut vendre sans lui demander de se tirer une balle dans le pied — **le ciblage des partenaires est donc une décision, pas un détail d'exécution.**
+
+**Le pitch qui tient devant lui** : *« les 40-60 % que vous passez à modéliser, ce n'est pas ce pour quoi votre client vous garde. C'est ce qu'il tolère. Enlevez-le et vous livrez en semaines au lieu de mois, au même prix, sur trois fois plus de sites. »*
+
+### Le piège structurel : le canal pur peut tuer notre moat
+
+C'est le point le plus important de Q10, et il n'apparaît nulle part ailleurs :
+
+> **Le mécanisme des priors inter-sites (§Q6.5) — le seul qu'un intégrateur ne peut structurellement pas répliquer — suppose que les corrections faites sur le site A remontent pour améliorer la proposition sur le site B.**
+>
+> Si l'intégrateur déploie en local chez son client et qu'on ne voit jamais rien, **les priors ne s'accumulent jamais.** On devient un fournisseur de composant, sans effet cumulatif, et l'avantage qu'on revendique disparaît.
+
+Donc le choix direct / canal n'est pas seulement une question de distribution : **il détermine si notre principal avantage technique peut exister.**
+
+**Sortie possible, déjà conçue ailleurs** : ne remonter que des **agrégats de motifs**, jamais de donnée client — exactement le mécanisme IMDS retenu pour la supply chain (`tarik.md`). Mais ça devient une **clause à négocier dans chaque contrat partenaire**, pas un acquis technique. À traiter comme telle dès le premier accord d'intégrateur, pas après.
+
+### Ce qui reste ouvert
+
+La réponse dépend d'une chose qu'on ne peut pas déduire : est-ce qu'un intégrateur voit cet outil comme un levier de capacité ou comme une attaque sur son métier ? **Trois personnes de la liste peuvent le dire**, et deux ont déjà reçu le message :
+
+- **Lyes Malek** — intégrateur de la plateforme Ignition (liste 2)
+- **Robin Jacot** (SPIE) — sa question porte déjà sur la part du projet passée dans le mapping
+- **Yanis Brahiti** (Capgemini Engineering) — sa troisième question est déjà *« est-ce que cette couche est produitisable ? »*
+
+Si les trois répondent « ça me fait gagner de la capacité », le canal est la voie et il faut cibler les intégrateurs contraints par leurs effectifs. Si l'un répond « c'est mon métier que vous attaquez », il faut le savoir **avant** de bâtir la stratégie de distribution dessus.
+
+---
 ---
 
 # Ce qu'il faut valider
@@ -614,6 +663,8 @@ Chacun est une affirmation tentante, fausse, et qui coûterait la crédibilité 
 15. ❌ **« Toute donnée est un actif »** — c'est l'inverse : la donnée brute est un passif, l'actif est la décision.
 15bis. ❌ **Réduire la convergence OT/IT au mapping des tags** — c'est la moitié OT du problème et sa couche la plus superficielle. La convergence, c'est la **jonction** entre entité OT et enregistrement IT (Q6, couche 3), et c'est là que la difficulté et la valeur se trouvent toutes les deux.
 15ter. ❌ **Laisser croire que la résolution d'entité est résolue** — elle est aujourd'hui en correspondance exacte normalisée, donc inopérante quand les noms OT et ERP ne se ressemblent pas. C'est la vraie dernière couche de spécificité.
+17. ❌ **« On aide les intégrateurs » sans regarder ce qu'ils vendent** — pour un intégrateur en régie, réduire l'effort de 40-60 % attaque directement son chiffre. L'argument ne tient que face à un intégrateur contraint par sa capacité, pas par la demande (Q10).
+18. ❌ **Supposer que le modèle canal est neutre pour la technique** — sans remontée d'agrégats, les priors inter-sites ne s'accumulent jamais et le moat de §Q6.5 disparaît. À traiter comme une clause contractuelle, pas comme un acquis (Q10).
 16. ❌ **Promettre l'automatisation totale de la modélisation** — la logique métier propre au site restera humaine.
 
 ---
