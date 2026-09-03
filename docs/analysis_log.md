@@ -9793,3 +9793,290 @@ Nothing sent.
 ### Still open
 
 `docs/tarik.md` credential block — sixteen flags, no decision.
+
+---
+
+## Entry 181 — 2026-09-02 — Messages rewritten one by one: each contact is asked what only they can answer
+
+Mohamed: *« take your time and adapt each message to each profil »*, with the goal stated as answering all our questions, learning the truth about the ideas, getting a call, and possibly a first POC during it. Entry 180's four templates were replaced by **68 individually written messages**.
+
+### The principle that changed the writing
+
+Not "personalise the greeting" — **ask each person the question they are uniquely placed to answer.** A template asks everyone the same thing and reads as a mail merge; the differentiated version makes the recipient feel the message could only have been sent to them. Examples of how the same underlying hypothesis was turned into different questions:
+
+- **Richard DELEYE** (Group OT Manager, multi-site) — the only person who can test the **cross-site priors thesis**: *"across sites of the same group, do naming conventions resemble each other, or did each site invent its own — and if they differ, are there still recurring patterns?"* Followed by why it matters: if the patterns are reusable the work is automatable, if not it isn't, and better to know now.
+- **Florian Schwarzt** (Siemens Energy, 100+ factory IIoT rollout) — same question at a scale nobody else on the list has reached. Written so a "no" is easy to give: *"I'd rather find out from you than after building it."*
+- **Jérôme WACRENIER** (VERKOR gigafactory) — the **greenfield counter-case**: everyone else manages 20-30 years of accumulated legacy. *"Starting from a blank page, could you impose a consistent naming convention between PLCs and ERP — or do the two worlds diverge even in greenfield?"* His answer tells us whether the problem is inherited or self-generating.
+- **Robin Jacot** (SPIE, integrator) — asked from the other side of §0.B: *what share of a project actually goes into the mapping work?* If it is the bulk, that is where automation belongs — and an integrator is better placed to say so than we are.
+- **Erwin Jaffredo** (NDT/CND) — inspection results are worthless unless tied to the right part, lot and order, so he lives the join more acutely than most.
+- **Arthur Toreau** (industrial cyber + OT/IT architect) — the only one asked whether **network segmentation kills data projects before they start**, tied to the ISO 10218:2025 cyber-in-functional-safety point.
+- **Sekou daou** (Node-RED, OPC UA) — *"what do you wire by hand in Node-RED that should be automatic?"* Node-RED is where everything the tools cannot do ends up.
+- **Yacine Aliouane** (Siemens/AVEVA/InTouch) — whether naming conventions differ **by vendor stack**, which is exactly the prior we would exploit.
+- **Xavier Allaume** and **Volkan Alkılıç** (both founders of adjacent platforms) — written founder-to-founder and asked the §0.B question directly: is the last mile genuinely irreducible, or has everyone simply found it easier to bill an integrator?
+
+### Deliberate variations
+
+Four registers still exist but are now the frame, not the content: terrain, direction (budget, no prototype offer — it would undercut "I'm not selling"), English peers, robotics. **13 messages name a mutual connection.** Length dropped from ~1300 to ~1000 characters average — more specific means shorter, because generic filler disappears.
+
+**11 contacts whose titles were never captured** get a deliberately cautious message that claims nothing about their role, plus a new red **"À faire avant envoi"** column instructing Mohamed to open the profile and personalise the hook first. Sending those as-is would be the one way this batch reads as automated.
+
+### Caught on readback
+
+A Cyrillic substitution had crept into Stéfan Jovanović's message — `процédés` instead of `procédés`, invisible at a glance and unmistakable to a French reader. Found by scanning every message for non-Latin letters rather than by eye. Zero markdown remains (LinkedIn renders plain text, per Entry 180).
+
+56 of 68 opening hooks are textually distinct; the 12 that repeat are the cautious-template group plus near-identical junior terrain profiles where nothing distinguishes them yet.
+
+Nothing sent.
+
+### Still open
+
+`docs/tarik.md` credential — seventeen flags. It is now also on GitHub in a pushed commit; only rotating the EmailJS key fixes it.
+
+---
+
+## Entry 182 — 2026-09-02 — Messages cut to a third: 1011 → 354 characters average
+
+Mohamed: *« i would send messages direct and the short possible, to show the air to read »*. Correct instinct — a 1000-character LinkedIn DM gets scrolled past, not read. The recipient decides whether to engage from the shape of the message before reading a word of it.
+
+### What was cut, and what was protected
+
+**Cut:** the self-justifying preamble (*« je préfère confronter nos hypothèses à des gens du terrain plutôt qu'à ce que je lis »*), the explanatory paragraph around each question, the prototype offer as its own paragraph, and the sign-off. All of it was reasonable prose and none of it earned its space in a DM.
+
+**Protected:** the individual question. That is the entire value of Entry 181's work and it survives intact — Richard Deleye is still the only one asked about naming conventions across sites of one group, Jérôme Wacrenier is still the greenfield counter-case, Robin Jacot is still asked from the integrator's side. Shortening removed padding, not differentiation.
+
+**Result:** 268 / 354 / 465 characters (min/avg/max), none above 600, against 1011 average before. Structure is now: one line of who I am · the question, on its own lines with a break · optional mutual connection · a short ask. The blank lines are the point — that is the "air" that makes a message look answerable at a glance.
+
+The ask varies by profile rather than being uniform: *« 15 min quand ça vous arrange ? »* for the ones worth a call, *« Même une réponse en deux lignes m'aiderait beaucoup »* for lower-priority or busy profiles where a written reply is a realistic win, and the prototype offer kept as a single clause for only four high-value technical contacts.
+
+### The long versions kept, not discarded
+
+Entry 181's full messages moved to a greyed **"Version longue (si la personne accroche)"** column. The short message opens the conversation; if someone engages and wants the reasoning, the developed version is already written. Nothing was thrown away — it was repositioned to the moment where length is actually welcome.
+
+Re-checked on the new text: zero markdown, zero non-Latin characters.
+
+### File state
+
+`prospects_workshop_2026-09-01.xlsx`, 20 columns: identity and segmentation · hypotheses each contact can validate · **short message to send** · pre-send warnings · campaign tracking (invitation / accepted / sent / status / what we learned) · long version in reserve.
+
+Nothing sent.
+
+### Still open
+
+`docs/tarik.md` credential — eighteen flags, now also live in a pushed GitHub commit. Only rotating the EmailJS key resolves it.
+
+---
+
+## Entry 183 — 2026-09-02 — "c'est short mais pas attractif" — the messages opened with us instead of them
+
+Mohamed, on the shortened batch: *« c'est short mais n'est pas attractif »*. Right, and the defect was structural rather than a matter of wording.
+
+### What was wrong
+
+Every message opened **« Bonjour X, Mohamed, CTO de MindSet Data — on travaille sur la donnée industrielle »**. That is the opening line of every vendor DM ever sent. The reader decides whether to engage from the first line, and the first line was about us. Short was necessary but not sufficient: brevity removes the reason to stop reading, it does not create a reason to reply.
+
+### Three levers added
+
+1. **Open on them, never on us.** All 68 now begin with the person's first name and an observation about their situation: *« Richard — OT au niveau groupe : vous êtes un des rares à voir plusieurs sites en même temps »*, *« Robin — vous êtes côté intégrateur, donc vous avez la réponse que les éditeurs n'ont pas »*. The self-introduction is demoted to a single parenthetical line at the very end, where it belongs.
+
+2. **A tension to react against, in 38 of 68.** People reply far more readily to correct someone than to do a favour. So each carries a stated belief the recipient can push back on: *« On me dit "c'est le chaos partout". Je n'y crois qu'à moitié »* · *« Ma conviction c'est la troisième. Contredisez-moi »* · *« Tous les éditeurs prétendent que c'est résolu. Je n'ai encore trouvé personne pour me le confirmer sur le terrain »*. Each is an honest position we actually hold, not manufactured provocation — if someone corrects us, we learn something real.
+
+3. **Give before asking.** The closing line now offers something concrete: *« J'ai épluché HighByte, Litmus, UMH ces dernières semaines — je vous envoie mes notes si ça vous intéresse »*. That is genuine reciprocity, we really do have those notes, and it costs nothing to honour.
+
+### Stakes made explicit where they are real
+
+Several messages now say why the answer matters to us, which raises the value of replying: *« toute notre approche dépend de la réponse »* (Deleye), *« Votre réponse vaut très cher pour moi »* (Wacrenier, the only greenfield case in the list), *« Si ces motifs existent, une grosse partie du mapping devient automatisable. S'ils n'existent pas, notre approche tombe »* (Aliouane). Telling someone their answer could kill your thesis is flattering and true at once.
+
+347 / 477 / 557 characters — slightly longer than v2's 354 average, and worth it: the added length is hook and tension, not padding. Zero markdown, zero non-Latin characters, verified again.
+
+### Kept
+
+The individual question from Entry 181 is untouched in all 68 — three passes now (long → short → attractive) and the differentiation has survived each one. Long versions remain in reserve in the last column.
+
+Nothing sent.
+
+### Still open
+
+`docs/tarik.md` credential — nineteen flags.
+
+---
+
+## Entry 184 — 2026-09-03 — v4: three questions per profile, the solution named, an explicit call ask, and mutual connections removed everywhere
+
+Mohamed rejected the Erwin message and set three new constraints: **never mention mutual connections**, say something about the solution, and ask for time to discuss it. Fourth pass on the batch.
+
+### What was wrong with the rejected message
+
+Three defects, and the worst was not stylistic:
+
+1. *« je n'ai vu ce profil chez personne d'autre dans ma liste »* — **reveals he is in a list.** The recipient instantly understands he is a row in a spreadsheet. Any phrasing that exposes the prospecting apparatus destroys the effect of everything else.
+2. *« Un résultat de contrôle ne vaut rien s'il n'est pas rattaché… »* — **explaining his own job to him.** He knows it better than we do; stating it reads as condescension dressed as insight.
+3. **One question yields one answer.** Against the stated goal — *« on veut gratter le max d'infos de chaque profile »* — a single question is the least efficient possible format.
+
+### The format change that raises the yield
+
+**Three numbered questions per person**, laddering: the fact → how it breaks → how often, or what it costs. The third is where the useful information sits, and it is never obtained by asking one isolated question.
+
+*« 3 questions rapides, si vous avez deux minutes »* does specific work: it bounds the effort, so the message gets opened; and numbering makes people answer all three rather than the first. Every one of the 68 triplets is written against what that person can actually know — Wacrenier gets asked how long a greenfield naming convention held before drifting, Deleye whether cross-site differences follow reusable patterns, Robin Jacot what would save him the most time.
+
+### The three constraints applied
+
+- **Zero mutual connections** — verified 0 occurrences across all 68. They were doing less work than they seemed to; naming a third party in a first message invites a check with that person before any reply.
+- **The solution, one line, concrete rather than buzzword**: *« une couche qui rapproche automatiquement la donnée machine de son contexte métier — OF, produit, équipement — avec un score de confiance sur chaque lien, et une validation humaine seulement quand le score est faible »*. Four variants: technical, direction (outcome-framed on decision delay), robotics (context to the fleet), English.
+- **Explicit call ask on all 68**, where prior versions often offered a written reply as the easy out. That was lowering the reply bar at the cost of the objective, which is calls.
+
+Length 589 / 738 / 883 characters — up from 477 average, and justified: two extra questions, a solution line and an ask. It still reads fast because the numbered block scans in a second.
+
+Kept from v3: opening on the person, never on us; the tension to react against; the signature reduced to one line. Zero markdown, zero non-Latin characters, re-verified.
+
+Nothing sent.
+
+### Still open
+
+`docs/tarik.md` credential — twenty flags.
+
+---
+
+## Entry 185 — 2026-09-03 — Solution description widened from the join alone to the whole chain
+
+Mohamed on the v4 messages: *« ici je voudrais parler de toute la solution pas que OF »*. The description was too narrow — it presented only the OT↔IT linking, which is one capability out of four, and the least self-explanatory one to someone reading cold.
+
+### What the one-liner was omitting
+
+| Omitted | Why it matters in a first message |
+|---|---|
+| **Lecture seule** | The first objection of any OT manager is "you're not writing to my PLCs". Saying it up front removes the biggest silent blocker |
+| **Génération automatique du modèle depuis la découverte** | This is the actual differentiator. The join alone sounds like ETL; auto-derivation with a confidence gate does not |
+| **Graphe interrogeable, y compris par un agent IA** | Connects to the reason budgets exist in 2026 — the agentic-AI push that exposed the limits of raw telemetry (Q1) |
+| **On-premise, la donnée ne sort pas** | The one argument that survived the HighByte finding intact |
+
+New wording, as three bullets so it stays scannable rather than becoming a paragraph:
+
+> De notre côté on construit une couche qui se branche **en lecture seule** sur l'OT (OPC-UA, MQTT) et l'IT (ERP, MES) :
+> - elle génère automatiquement le modèle du site depuis la découverte, avec un score de confiance par lien — l'humain ne valide que ce qui est incertain
+> - elle relie chaque équipement OT à son enregistrement ERP/MES
+> - elle expose le tout comme un graphe interrogeable, par vos outils ou par un agent IA, sans que la donnée quitte le site
+
+Four variants: technical (above), direction (framed on the delay between incident and informed decision, plus product/customer context), robotics (real-time plant context available to a dashboard, an agent, or a fleet), English.
+
+**Coverage verified rather than assumed**: 61/68 mention read-only and the queryable graph — the 7 that don't are the direction and robotics variants, where the phrasing is deliberately outcome-led; **68/68 state that data does not leave the site.**
+
+Length rose to 946 characters average from 738. Accepted: describing the whole solution costs words, and the structure (hook · numbered block · tension · bullets · ask) still scans in a couple of seconds.
+
+### Method note
+
+The heredoc used to patch the four constants converted `\n` escapes into real newlines inside Python string literals, producing a syntax error. Fixed with direct file edits instead. Worth remembering: **patching source through a shell heredoc mangles escape sequences** — edit the file directly when the content contains them.
+
+Also cost two Excel lock collisions this turn; the write silently targeted a locked file and the readback still showed the old text, which is how it was caught.
+
+Nothing sent.
+
+### Still open
+
+`docs/tarik.md` credential — twenty-one flags.
+
+---
+
+## Entry 186 — 2026-09-03 — Em-dashes removed; the naive replacement introduced a punctuation bug that needed a second pass
+
+Mohamed: *« j'adore, juste delete ce symbole : — »*. The em-dash was everywhere in the messages, and it is a real tell — it reads as generated text to anyone who notices it.
+
+### Replacement had to be context-aware, not a blind delete
+
+Deleting the character outright would have produced broken sentences. Three distinct grammatical roles, three different fixes:
+
+1. **Paired dashes framing an aside** (`Quand ça casse — contrôle rattaché au mauvais lot — vous le détectez`) → parentheses.
+2. **The opening hook** (`Erwin — le NDT 4.0…`) → comma.
+3. **A single dash introducing an explanation** (`score de confiance par lien — l'humain ne valide que…`) → a conjunction, so `, et l'humain ne valide que…`.
+
+### The bug that the first pass created
+
+Converting paired dashes to parentheses **dropped the punctuation that the closing dash was carrying**: *« Quand ça casse (contrôle rattaché au mauvais lot) vous le détectez comment ? »* — missing the comma after the closing bracket. Grammatically wrong and visible to any French reader.
+
+Found by scanning for `)` followed directly by a clause opener (`vous`, `on`, `ça`, `il`, `c'est`…) rather than by re-reading 68 messages. **46 of the 68 messages were affected** — nearly the whole batch, from a rule that looked correct on the one example I checked first.
+
+Final state: 0 em-dashes, 0 double commas, 0 double spaces, 0 unbalanced parentheses across all 68.
+
+### One column deliberately left untouched
+
+Em-dashes also appeared in four `Titre / Poste` cells, but that column holds **real LinkedIn titles** (e.g. *"CTO — Directeur Technique & Innovation"*). Rewriting them would make the sheet disagree with the actual profile when Mohamed opens it. The three columns that are our own writing (Note, À faire avant envoi, Segment) were cleaned — 53 cells.
+
+Nothing sent.
+
+### Still open
+
+`docs/tarik.md` credential — twenty-two flags.
+
+---
+
+## Entry 187 — 2026-09-03 — Modbus claim removed, and a corrupted English message that had been sitting there since v4
+
+Mohamed had swapped MQTT for **Modbus** in the solution paragraph, for a stated reason worth recording: *« je voudrais couvrir tous le parc des connecteurs et je sais pas si mqtt est de l'OT ou l'IT »*. The intent was legitimate — signal breadth — but the execution had two problems and one hidden third.
+
+### The technical question underneath it
+
+**MQTT is neither OT nor IT: it is the bus between them.** Modbus, OPC-UA, Profinet and EtherNet/IP are fieldbus protocols that talk *to the PLC*. MQTT is pub/sub messaging — it talks to no PLC. In practice a gateway reads the PLC over OPC-UA or Modbus and *publishes* to MQTT, which is exactly why MQTT is the transport of UNS and Sparkplug B.
+
+Worth having ready for the workshop, because it is a pitch point rather than trivia: saying MQTT tells an industrial reader *"he already speaks my target architecture."* Modbus sends no such signal.
+
+### Why the swap had to be undone
+
+`modbus_read` is a **demo stub that errors if executed**. The swap therefore removed a real connector (MQTT, built and tested) to advertise one that does not exist — to an audience whose first instinct is to ask *"on which equipment?"*. And the `...` meant to convey "etc." invites the reader to mentally substitute *their* protocol, manufacturing precisely the expectation it was meant to avoid.
+
+### Resolution: sidestep the classification instead of answering it
+
+> De notre côté on construit une couche qui se branche en lecture seule sur **vos systèmes existants** : automates via OPC-UA, brokers MQTT, ERP, MES, bases SQL.
+> […]
+> **L'architecture est agnostique au protocole, les connecteurs s'ajoutent selon le parc.**
+
+Breadth (five real sources plus an opening), nothing false, and the OT/IT placement question disappears. The closing sentence replaces the ellipsis and is **the rule Mohamed already locked in his own workshop plan** (Sheet 1, topic 2): *« ne pas dire "on couvre déjà tout", dire "l'architecture s'étend, les connecteurs se construisent au fur et à mesure" »*.
+
+### The bug this uncovered
+
+The first patch only reached 22 of 68 messages: the earlier em-dash cleanup had inserted a comma (`(OPC-UA, MQTT), et l'IT`) that my search string did not contain. Fixed with a regex tolerant of it.
+
+More seriously, checking the leftovers exposed **Lukasz Tomaszewski's message carrying a French body inside an English message** — `"On our side we're building une couche qui se branche en lecture seule..."`. That came from a `.replace()` chain in the v4 generator whose second target stopped matching after the em-dash cleanup, and **it had been sitting in the file for two entries**. Entry 184's verification counted *"avec la solution : 68"* without ever checking that the language matched the message. Rewritten with a proper English robotics paragraph.
+
+**Lesson: counting that a field is present is not verification. It has to be checked against what it should contain** — here, that an English message is in English.
+
+Final state across 68: 0 Modbus, 0 ellipses, 0 em-dashes, 0 residual French in the 4 English messages, 64 FR + 4 EN carrying the connector-openness sentence.
+
+Nothing sent.
+
+### Still open
+
+`docs/tarik.md` credential — twenty-three flags.
+
+---
+
+## Entry 188 — 2026-09-03 — First acceptances arriving; Raphael Martin turns out to be the single most valuable contact on the list
+
+Mohamed reports that people have started accepting and he has begun sending. He shared Raphael Martin's full profile — one of the 11 flagged *"titre non capturé, à personnaliser avant envoi"*, which is exactly the case that warning existed for.
+
+### Why this profile changes his ranking
+
+The captured title was blank; the real profile is the best match in the whole file:
+
+- **19 years running the bureau d'études informatique industrielle at CEMIOS** (2003-2022) — mechatronic test benches for automotive, aerospace and medical, bespoke software for automation, acquisition and control, leading a team of 4-5.
+- **Then Schneider Electric since 2022**, H&D Europe Industrialization team, tagged Smart Manufacturing / Industrie 4.0.
+
+**He was the integrator for 19 years and now sits at a vendor.** That is precisely the person who can answer §0.B's open question — whether the site-specific last mile is genuinely irreducible or whether the industry simply found it more profitable to bill it — and he can answer it from *both* sides. Nobody else on the list can.
+
+Second angle: *"Passionné de machine learning et de deep learning"*, and he reposted an article on explaining how GPT models work. That makes him a credible sounding board on **documented risk #2** — whether our deterministic weighted score is a defensible choice or a limitation next to HighByte's LLM approach.
+
+### The message written for him
+
+Three questions built on the arc of his career: what share of time went to giving data meaning versus pure engineering · did that work repeat across clients or restart each time · **and, seen from Schneider today, is this layer actually productisable or will it stay bespoke**. The third is the one worth the call.
+
+It also volunteers the weakness: *« notre score de confiance est une formule déterministe, pas un modèle. Auditable, mais peut-être moins bon. Je ne sais pas encore si c'est un choix ou une limite. »* Not false modesty — it is the fastest way to get an informed opinion on risk #2 for free, from someone qualified to give it.
+
+Row 50 updated: promoted to **★★★**, segment A2, 1st degree, real title and employer, hypothesis coverage extended to *"+ le coeur de Q6"*, warning cleared, status set to **"Acceptée - à messager"** with the acceptance date.
+
+### What this validates about the method
+
+The *"à vérifier avant envoi"* column earned its place on its first use. Had the generic cautious message gone out, it would have wasted the highest-value contact in the file on a message that claimed nothing about him. **10 contacts still carry that flag** — same treatment applies as each one accepts.
+
+Message length is 1659 characters, well above the 946 average. Deliberate: he warrants the longest message on the list, and his profile shows someone who reads.
+
+### Still open
+
+`docs/tarik.md` credential — twenty-four flags.
