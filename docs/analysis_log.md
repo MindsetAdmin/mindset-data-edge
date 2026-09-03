@@ -10080,3 +10080,70 @@ Message length is 1659 characters, well above the 946 average. Deliberate: he wa
 ### Still open
 
 `docs/tarik.md` credential — twenty-four flags.
+
+---
+
+## Entry 189 — 2026-09-03 — Send dates recorded on the 19, and a follow-up date added
+
+Statuses had been set to *Envoyé* but the date columns were empty, which makes follow-up impossible to time — and a follow-up at 7-10 days on a non-responder is the single highest-converting action left in this campaign.
+
+All 19 dated **2026-09-03** on both *Message envoyé le* and *Acceptée le* (the two happened the same day; Raphael Martin's acceptance date was already recorded and was left as-is). Added a **"Relancer le"** column set to **2026-09-13**, J+10, so the file answers "who is overdue" by filtering rather than by memory.
+
+### Who has been reached, and the gap that matters
+
+The 19 cover most of the high-value profiles: Raphael Martin, Erwin Jaffredo, Arthur Toreau, Randy Lendoye, Robin Jacot (the integrator angle), Xavier Allaume and Volkan Alkılıç (both founders), Vikan Chirawatpongsa, plus the whole robotics track.
+
+**Three absences matter more than the 49 remaining:**
+
+- **Richard DELEYE** (Group OT Manager) and **Florian Schwarzt** (100+ factory rollout) are the only two people on the list who can validate or kill the **cross-site priors thesis** — the mechanism Q6 identifies as the one an integrator structurally cannot replicate, and therefore the load-bearing element of the whole productisation argument.
+- **Jérôme WACRENIER** (VERKOR) is the only greenfield case, and the only way to learn whether the problem is inherited or self-generating.
+
+All three are 2nd/3rd degree and presumably have not accepted yet. If they never do, the answer to the question that decides whether this is automatable is simply missing, and Q6 stays a thesis. Worth chasing specifically rather than waiting.
+
+### Column S remains empty and remains the point
+
+*Réponse / ce qu'on a appris* has no entries yet, which is expected on day one. Recorded again here because it is where H1-H8 live or die, and the instruction stands: capture answers **in their words**, not translated into our vocabulary — that phrasing is the customer language the workshop needs.
+
+### Still open
+
+`docs/tarik.md` credential — twenty-five flags.
+
+---
+
+## Entry 190 — 2026-09-03 — Second prospecting pass: 30 new contacts on six unused search angles, file now at 98
+
+Mohamed wants maximum outreach. Prospected LinkedIn again using angles deliberately absent from the first pass, so the new names are genuinely new rather than deeper pages of the same searches. **Zero duplicates** against the existing 68, checked on both slug and name.
+
+### The angles, and why each was chosen
+
+| Segment | N | What it tests that list 1 could not |
+|---|---|---|
+| **E1 · MES / MOM** | 5 | The MES is where machine data meets production data. These people live the join daily |
+| **E2 · Historian / PI System** | 4 | **Directly tests Q9** — they already own the storage layer, so they can say whether storing solves anything |
+| **E3 · Ignition / UNS** | 3 | **Directly tests H2** — people who have actually deployed platform tooling |
+| **E4 · Usine du futur** | 4 | Own the transverse topic that Q1 says has no owner between IT and production |
+| **E5 · Maintenance** | 6 | Feel the pain without doing the mapping — the right people to price `t_comprendre` |
+| **E6 · Data industrielle** | 3 | The consumers whose context cost Q9 argues is paid repeatedly |
+| **E7 · Automatisme / SCADA** | 5 | Terrain, at the source of the data |
+
+### The finds that matter
+
+- **Lyes MALEK** — *Ingénieur automatisme chez Hexa-AI, **intégrateur de la plateforme Ignition***. A French platform integrator: he can answer H2 (are these tools actually deployed here, or only visible on LinkedIn) **and** the §0.B question from the integrator's side, in one conversation.
+- **Erik Forsgren** — *Ignition 8 Gold Certified, UNS* in the headline. Has actually built the thing we theorise about.
+- **Sofiane OUCHENE** (PI System + Seeq) and **Lucas DISS** (OSIsoft PI + MES + **GMP**) — the two best tests of Q9. Lucas's message goes further and puts our deterministic-scoring argument to him directly: *« "le LLM a proposé" ne tient pas devant un auditeur »* — in a validated pharma environment he is qualified to say whether that reasoning holds.
+- **Prateek Jain** — accredited PI specialist whose mutual connection is **Kudzai Manditereza**, associated with HighByte. A second, independent path toward the competitor.
+- **Marco NICOLAS** — *Responsable Usine du Futur*, mutual with Erwin Jaffredo who is already contacted.
+
+### Maintenance as a deliberate segment
+
+Six maintenance managers, who do not do the mapping and never will. They are there for one question: *« quand une machine s'arrête, combien de temps avant de savoir sur quel produit et quel lot ? »* — a direct measurement of `t_comprendre`, the term Q9 claims dominates decision latency. Their message says so plainly: *« Tout le monde parle de réduire les arrêts. Presque personne ne sait dire combien de temps il faut juste pour comprendre ce qui s'est passé. »*
+
+Four of the six share **MAZELIN Hervé** as a mutual connection — a cluster worth noting, though per the standing rule no message names him.
+
+### State
+
+**98 contacts**: 19 sent, 79 to send. All 30 new rows carry a written message, a real profile link, hypothesis mapping, and `Source = 03/09 (liste 2)` so the two waves stay distinguishable. Messages average 1111 characters, same v4 format. Zero em-dashes, zero markdown, zero non-Latin characters, zero missing links.
+
+### Still open
+
+`docs/tarik.md` credential — twenty-six flags.
